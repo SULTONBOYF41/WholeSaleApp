@@ -1,0 +1,38 @@
+app/
+├─ _layout.tsx                        # Root (expo-router) – Reanimated/Gesture handler provider
+├─ index.tsx                          # Auth tekshiradi → (auth)/login yoki (main)/home
+├─ (auth)/
+│  └─ login.tsx                       # Lokal sign-in (bitta login/parol)
+├─ (main)/
+│  ├─ _layout.tsx                     # Header + chap menyu (Филиаллар/Дўконлар/Админ)
+│  ├─ home.tsx                        # Default – “менюни очинг” ekrani
+│  ├─ admin/
+│  │  ├─ add-store.tsx                # Филиал/Дўкон қўшиш (radio, kategoriya narxlari, CRUD ro‘yxat)
+│  │  ├─ catalog.tsx                  # Каталог: nom + filial/do‘kon narx, ro‘yxat, CRUD
+│  └─ store/
+│     └─ [id]/
+│        ├─ _layout.tsx               # Pastki fixed tablar: Дашборд / Сотув / Қайтариш
+│        ├─ dashboard.tsx             # Ko‘rsatkichlar (storeId bo‘yicha)
+│        ├─ sales.tsx                 # Сотув: forma + addSale
+│        ├─ history.tsx
+│        └─ returns.tsx               # Қайтариш: forma + addReturn
+components/
+├─ UI.tsx 
+lib/
+├─ supabase.ts                         # Supabase client (authsiz, realtime yoqilgan)
+├─ net.ts
+├─ device.ts  
+├─ local-auth.ts                       # Lokal sign-in (AsyncStorage’da flag)
+└─ storage.ts                          # AsyncStorage helper’lar (getJSON/setJSON, kalitlar)
+store/
+├─ inventoryStore.ts
+├─ syncStore.ts
+└─ appStore.ts                         # Barcha state/CRUD/Queue + Push/Pull/Realtime (Zustand)
+types/
+└─ index.ts                            # Tiplar: Store/Category/Product/Sale/Return/QueueItem va hok.
+utils/
+├─ format.ts                           # (ixtiyoriy) formatMoney, date helpers…
+
+
+
+
