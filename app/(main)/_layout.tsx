@@ -5,8 +5,11 @@ import { useAppStore } from "@/store/appStore";
 import { Ionicons } from "@expo/vector-icons";
 import { Slot, router } from "expo-router";
 import React, { useEffect, useRef, useState } from "react";
-import { Animated, Platform, Pressable, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { Animated, Dimensions, Easing, Platform, Pressable, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+
+const { width: SCREEN_W } = Dimensions.get("window");
+const DRAWER_W = Math.min(300, Math.floor(SCREEN_W * 0.86));
 
 export default function MainLayout() {
     const menuOpen = useAppStore((s) => s.menuOpen);
@@ -16,24 +19,41 @@ export default function MainLayout() {
 
     const currentStoreName = stores.find((x) => x.id === currentStoreId)?.name ?? "Рукшона — Меню";
 
-    // Header + NetBanner umumiy balandligini o'lchaymiz
-    const [topH, setTopH] = useState<number>(56 + (Platform.OS === "android" ? 8 : 0) + 32); // taxminiy default
-    const slide = useRef(new Animated.Value(0)).current; // 0: ko'rinadi, 1: yashirin (menu ochiq)
+    // Top (Header + NetBanner) balandligi
+    const [topH, setTopH] = useState<number>(56 + (Platform.OS === "android" ? 8 : 0) + 32);
+
+    // Progress: 0 -> yopiq, 1 -> ochiq
+    const progress = useRef(new Animated.Value(0)).current;
 
     useEffect(() => {
-        Animated.timing(slide, {
+        Animated.timing(progress, {
             toValue: menuOpen ? 1 : 0,
-            duration: 220,
+            duration: 260,
+            easing: Easing.out(Easing.cubic),
             useNativeDriver: true,
         }).start();
     }, [menuOpen]);
 
-    const translateY = slide.interpolate({
+    // Header + NetBanner vertikal surish
+    const translateY = progress.interpolate({
         inputRange: [0, 1],
-        outputRange: [0, -topH], // konteynerni tepaga chiqarib yuboramiz
+        outputRange: [0, -topH],
     });
 
-    const overlayTop = menuOpen ? 0 : topH; // menu ochiq bo'lsa to'liq yuqoridan boshlab yopsin
+    // Backdrop opacity
+    const backdropOpacity = progress.interpolate({
+        inputRange: [0, 1],
+        outputRange: [0, 1],
+    });
+
+    // Drawer chapdan kirish
+    const drawerTX = progress.interpolate({
+        inputRange: [0, 1],
+        outputRange: [-DRAWER_W, 0],
+    });
+
+    // Backdrop yuqori chegarasi (menyu ochiq paytda to'liq ekranga yoyilsin)
+    const overlayTop = menuOpen ? 0 : topH;
 
     return (
         <View style={styles.root}>
@@ -44,7 +64,11 @@ export default function MainLayout() {
             >
                 <SafeAreaView edges={["top"]} style={{ backgroundColor: "#fff" }}>
                     <View style={[styles.header, Platform.OS === "android" && { paddingTop: 8 }]}>
-                        <TouchableOpacity onPress={() => setMenu(!menuOpen)} style={styles.iconBtn} accessibilityLabel="Меню">
+                        <TouchableOpacity
+                            onPress={() => setMenu(!menuOpen)}
+                            style={styles.iconBtn}
+                            accessibilityLabel="Меню"
+                        >
                             <Ionicons name="menu" size={24} />
                         </TouchableOpacity>
 
@@ -53,28 +77,42 @@ export default function MainLayout() {
                     </View>
                 </SafeAreaView>
 
-                {/* Online/Offline Banner (balandligi animatsiyali) */}
+                {/* Online/Offline Banner */}
                 <NetBanner />
             </Animated.View>
 
             {/* Content */}
             <View style={{ flex: 1 }}>
-                {/* Top bo'lim sirg'alganiga qaramay kontent to'g'ri pozitsiyada */}
                 <Slot />
             </View>
 
-            {/* Left Drawer + Backdrop */}
-            {menuOpen && (
-                <>
-                    <Pressable style={[styles.backdrop, { top: overlayTop }]} onPress={() => setMenu(false)} />
-                    <LeftMenu onClose={() => setMenu(false)} top={overlayTop} />
-                </>
-            )}
+            {/* Backdrop (fade) */}
+            <Animated.View
+                pointerEvents={menuOpen ? "auto" : "none"}
+                style={[
+                    styles.backdrop,
+                    { top: overlayTop, opacity: backdropOpacity },
+                ]}
+            >
+                <Pressable style={{ flex: 1 }} onPress={() => setMenu(false)} />
+            </Animated.View>
+
+            {/* Left Drawer (slide-in) */}
+            <Animated.View
+                style={[
+                    styles.drawer,
+                    { top: overlayTop, width: DRAWER_W, transform: [{ translateX: drawerTX }] },
+                ]}
+            >
+                <LeftMenu
+                    onClose={() => setMenu(false)}
+                />
+            </Animated.View>
         </View>
     );
 }
 
-function LeftMenu({ onClose, top }: { onClose: () => void; top: number }) {
+function LeftMenu({ onClose }: { onClose: () => void }) {
     const stores = useAppStore((s) => s.stores);
     const setCurrentStore = useAppStore((s) => s.setCurrentStore);
 
@@ -99,7 +137,7 @@ function LeftMenu({ onClose, top }: { onClose: () => void; top: number }) {
     };
 
     return (
-        <View style={[styles.drawer, { top }]}>
+        <View style={styles.drawerInner}>
             <Text style={styles.sectionTitleRed}>Филиаллар</Text>
             {branches.length === 0 && <Text style={styles.emptyHint}>Ҳали филиал қўшилмаган</Text>}
             {branches.map((b) => (
@@ -161,17 +199,25 @@ const styles = StyleSheet.create({
         left: 0,
         right: 0,
         bottom: 0,
-        backgroundColor: "rgba(0,0,0,0.15)",
+        backgroundColor: "rgba(0,0,0,0.18)",
     },
 
     drawer: {
         position: "absolute",
         left: 0,
         bottom: 0,
-        width: 300,
         backgroundColor: "#fff",
         borderRightWidth: 1,
         borderColor: "#eee",
+        // soyalar
+        shadowColor: "#000",
+        shadowOpacity: 0.12,
+        shadowRadius: 8,
+        shadowOffset: { width: 0, height: 4 },
+        elevation: 6,
+    },
+
+    drawerInner: {
         padding: 14,
     },
 
