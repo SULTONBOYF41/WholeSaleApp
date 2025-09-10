@@ -1,205 +1,315 @@
-import { C, Card, H1, Select } from "@/components/UI";
+import { Button, C, Card, H1, H2, Select } from "@/components/UI";
 import { useAppStore } from "@/store/appStore";
 import { useSyncStore } from "@/store/syncStore";
+import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams } from "expo-router";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { FlatList, Modal, Pressable, Text, TextInput, TouchableOpacity, View } from "react-native";
 
 type Tab = "sales" | "returns";
-type MonthOpt = { label: string; value: string };
 
-function monthRange(ym: string) {
-    const [y, m] = ym.split("-").map(Number);
-    const start = new Date(y, m - 1, 1).getTime();
-    const end = new Date(y, m, 1).getTime() - 1;
-    return { start, end };
+function monthOptions(lastN = 12) {
+    const now = new Date();
+    const arr = [];
+    for (let i = 0; i < lastN; i++) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        const val = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+        const label = d.toLocaleString(undefined, { year: "numeric", month: "long" });
+        arr.push({ label, value: val });
+    }
+    return arr;
 }
-const money = (n: number) => `${Math.round(n).toLocaleString()} so‘m`;
+function inSameMonth(ts: number, ym: string) {
+    const d = new Date(ts);
+    const [y, m] = ym.split("-").map(Number);
+    return d.getFullYear() === y && d.getMonth() + 1 === m;
+}
 
 export default function History() {
     const { id } = useLocalSearchParams<{ id: string }>();
+
+    const salesAll = useAppStore((s) => s.sales);
+    const returnsAll = useAppStore((s) => s.returns);
+
+    const updateSale = useAppStore((s) => s.updateSale);
+    const removeSale = useAppStore((s) => s.removeSale);
+    const updateReturn = useAppStore((s) => s.updateReturn);
+    const removeReturn = useAppStore((s) => s.removeReturn);
+
     const online = useSyncStore((s) => s.online);
-
-    const allSales = useAppStore((s) => s.sales);
-    const allReturns = useAppStore((s) => s.returns);
-    const startPull = useAppStore((s) => s.startPull);
-
-    const updateSale = useAppStore((s) => (s as any).updateSale);
-    const removeSale = useAppStore((s) => (s as any).removeSale);
-    const updateReturn = useAppStore((s) => (s as any).updateReturn);
-    const removeReturn = useAppStore((s) => (s as any).removeReturn);
+    const pushNow = useAppStore((s) => s.pushNow);
+    const pullNow = useAppStore((s) => s.pullNow);
 
     const [tab, setTab] = useState<Tab>("sales");
 
-    const now = new Date();
-    const defaultYM = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-    const [ym, setYm] = useState(defaultYM);
-    const { start, end } = monthRange(ym);
-
-    const months: MonthOpt[] = useMemo(() => {
-        const arr: MonthOpt[] = [];
-        const names = ["Янв", "Фев", "Мар", "Апр", "Май", "Июн", "Июл", "Авг", "Сен", "Окт", "Ноя", "Дек"];
-        const d = new Date();
-        for (let i = 0; i < 18; i++) {
-            const y = d.getFullYear(), m = d.getMonth() + 1;
-            arr.push({ value: `${y}-${String(m).padStart(2, "0")}`, label: `${names[m - 1]} ${y}` });
-            d.setMonth(d.getMonth() - 1);
-        }
-        return arr;
-    }, []);
+    const opts = useMemo(() => monthOptions(18), []);
+    const [month, setMonth] = useState(opts[0]?.value);
 
     const sales = useMemo(
-        () => allSales.filter((x) => x.storeId === id && x.created_at >= start && x.created_at <= end),
-        [allSales, id, start, end]
+        () =>
+            salesAll
+                .filter((x) => x.storeId === id && (!month || inSameMonth(x.created_at, month)))
+                .sort((a, b) => b.created_at - a.created_at),
+        [salesAll, id, month]
     );
     const returns = useMemo(
-        () => allReturns.filter((x) => x.storeId === id && x.created_at >= start && x.created_at <= end),
-        [allReturns, id, start, end]
+        () =>
+            returnsAll
+                .filter((x) => x.storeId === id && (!month || inSameMonth(x.created_at, month)))
+                .sort((a, b) => b.created_at - a.created_at),
+        [returnsAll, id, month]
     );
 
-    const [editOpen, setEditOpen] = useState<{ type: Tab; id: string; qty: string; price: string } | null>(null);
+    // Edit modallar
+    const [editSaleId, setEditSaleId] = useState<string | null>(null);
+    const [editReturnId, setEditReturnId] = useState<string | null>(null);
+    const [qty, setQty] = useState("");
+    const [price, setPrice] = useState("");
 
-    useEffect(() => {
-        startPull().catch(() => { });
-    }, [startPull]);
+    const openSaleEdit = (id: string, initQty: number, initPrice: number) => {
+        setEditReturnId(null);
+        setEditSaleId(id);
+        setQty(String(initQty));
+        setPrice(String(initPrice));
+    };
+    const openReturnEdit = (id: string, initQty: number, initPrice: number) => {
+        setEditSaleId(null);
+        setEditReturnId(id);
+        setQty(String(initQty));
+        setPrice(String(initPrice));
+    };
 
-    const onEdit = (type: Tab, item: any) => {
-        setEditOpen({ type, id: item.id, qty: String(item.qty), price: String(item.price) });
-    };
-    const onDelete = async (type: Tab, id: string) => {
-        if (type === "sales") {
-            if (typeof removeSale === "function") await removeSale(id);
-        } else {
-            if (typeof removeReturn === "function") await removeReturn(id);
-        }
+    const saveSale = async () => {
+        if (!editSaleId) return;
+        await updateSale(editSaleId, { qty: Number(qty || "0"), price: Number(price || "0") });
         if (online) {
-            try { await useAppStore.getState().pushNow(); } catch { }
-            try { await useAppStore.getState().pullNow(); } catch { }
+            try { await pushNow(); } catch { }
+            try { await pullNow(); } catch { }
+        }
+        setEditSaleId(null);
+    };
+    const saveReturn = async () => {
+        if (!editReturnId) return;
+        await updateReturn(editReturnId, { qty: Number(qty || "0"), price: Number(price || "0") });
+        if (online) {
+            try { await pushNow(); } catch { }
+            try { await pullNow(); } catch { }
+        }
+        setEditReturnId(null);
+    };
+
+    const deleteSale = async (id: string) => {
+        await removeSale(id);
+        if (online) {
+            try { await pushNow(); } catch { }
+            try { await pullNow(); } catch { }
         }
     };
-    const applyEdit = async () => {
-        if (!editOpen) return;
-        const qty = Number(editOpen.qty || "0");
-        const price = Number(editOpen.price || "0");
-        if (!qty || !price) { setEditOpen(null); return; }
-        if (editOpen.type === "sales") {
-            if (typeof updateSale === "function") await updateSale(editOpen.id, { qty, price });
-        } else {
-            if (typeof updateReturn === "function") await updateReturn(editOpen.id, { qty, price });
-        }
+    const deleteReturn = async (id: string) => {
+        await removeReturn(id);
         if (online) {
-            try { await useAppStore.getState().pushNow(); } catch { }
-            try { await useAppStore.getState().pullNow(); } catch { }
+            try { await pushNow(); } catch { }
+            try { await pullNow(); } catch { }
         }
-        setEditOpen(null);
+    };
+
+    const renderSale = ({ item }: any) => {
+        const amount = item.qty * item.price;
+        const d = new Date(item.created_at);
+        return (
+            <Card style={{ marginTop: 8, padding: 12 }}>
+                <View style={{ flexDirection: "row", alignItems: "center" }}>
+                    {/* chap: sana + nom + qty */}
+                    <View style={{ flex: 1, paddingRight: 10 }}>
+                        <Text style={{ color: C.muted, fontSize: 12 }}>
+                            {d.toLocaleDateString()} {d.toLocaleTimeString()}
+                        </Text>
+                        <Text style={{ fontWeight: "800", color: C.text, marginTop: 2 }}>{item.productName}</Text>
+                        <Text style={{ color: C.muted, marginTop: 2 }}>
+                            Миқдор: {item.qty} {item.unit} × {item.price.toLocaleString()}
+                        </Text>
+                    </View>
+
+                    {/* o‘ng: summa + tugmalar */}
+                    <View style={{ alignItems: "flex-end" }}>
+                        <Text style={{ fontWeight: "800" }}>{amount.toLocaleString()} so‘m</Text>
+                        <View style={{ flexDirection: "row", gap: 8, marginTop: 8 }}>
+                            <TouchableOpacity
+                                onPress={() => openSaleEdit(item.id, item.qty, item.price)}
+                                style={{
+                                    width: 36, height: 36, borderRadius: 18,
+                                    backgroundColor: "#fff", borderWidth: 1, borderColor: "#E9ECF1",
+                                    alignItems: "center", justifyContent: "center",
+                                }}
+                            >
+                                <Ionicons name="create-outline" size={18} color="#770E13" />
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                onPress={() => deleteSale(item.id)}
+                                style={{
+                                    width: 36, height: 36, borderRadius: 18,
+                                    backgroundColor: "#FCE9EA", borderWidth: 1, borderColor: "#F4C7CB",
+                                    alignItems: "center", justifyContent: "center",
+                                }}
+                            >
+                                <Ionicons name="close-outline" size={18} color="#E23D3D" />
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                </View>
+            </Card>
+        );
+    };
+
+    const renderReturn = ({ item }: any) => {
+        const amount = item.qty * item.price;
+        const d = new Date(item.created_at);
+        return (
+            <Card style={{ marginTop: 8, padding: 12 }}>
+                <View style={{ flexDirection: "row", alignItems: "center" }}>
+                    <View style={{ flex: 1, paddingRight: 10 }}>
+                        <Text style={{ color: C.muted, fontSize: 12 }}>
+                            {d.toLocaleDateString()} {d.toLocaleTimeString()}
+                        </Text>
+                        <Text style={{ fontWeight: "800", color: C.text, marginTop: 2 }}>{item.productName}</Text>
+                        <Text style={{ color: C.muted, marginTop: 2 }}>
+                            Миқдор: {item.qty} {item.unit} × {item.price.toLocaleString()}
+                        </Text>
+                    </View>
+
+                    <View style={{ alignItems: "flex-end" }}>
+                        <Text style={{ fontWeight: "800" }}>{amount.toLocaleString()} so‘m</Text>
+                        <View style={{ flexDirection: "row", gap: 8, marginTop: 8 }}>
+                            <TouchableOpacity
+                                onPress={() => openReturnEdit(item.id, item.qty, item.price)}
+                                style={{
+                                    width: 36, height: 36, borderRadius: 18,
+                                    backgroundColor: "#fff", borderWidth: 1, borderColor: "#E9ECF1",
+                                    alignItems: "center", justifyContent: "center",
+                                }}
+                            >
+                                <Ionicons name="create-outline" size={18} color="#770E13" />
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                onPress={() => deleteReturn(item.id)}
+                                style={{
+                                    width: 36, height: 36, borderRadius: 18,
+                                    backgroundColor: "#FCE9EA", borderWidth: 1, borderColor: "#F4C7CB",
+                                    alignItems: "center", justifyContent: "center",
+                                }}
+                            >
+                                <Ionicons name="close-outline" size={18} color="#E23D3D" />
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                </View>
+            </Card>
+        );
     };
 
     return (
         <View style={{ flex: 1, padding: 16 }}>
             <H1>Тарих</H1>
 
-            {/* Tabs */}
-            <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
-                <TouchableOpacity
-                    onPress={() => setTab("sales")}
-                    style={{
-                        flex: 1, paddingVertical: 12, borderRadius: 12, borderWidth: 1, borderColor: C.primary,
-                        backgroundColor: tab === "sales" ? C.primary : "#fff", alignItems: "center",
-                    }}
-                >
-                    <Text style={{ fontWeight: "800", color: tab === "sales" ? "#fff" : C.primary }}>Sotuv tarixi</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                    onPress={() => setTab("returns")}
-                    style={{
-                        flex: 1, paddingVertical: 12, borderRadius: 12, borderWidth: 1, borderColor: C.primary,
-                        backgroundColor: tab === "returns" ? C.primary : "#fff", alignItems: "center",
-                    }}
-                >
-                    <Text style={{ fontWeight: "800", color: tab === "returns" ? "#fff" : C.primary }}>Vazvrat tarixi</Text>
-                </TouchableOpacity>
-            </View>
-
-            {/* Oy filtr */}
-            <View style={{ marginTop: 10 }}>
-                <Select value={ym} onChange={setYm} options={months} placeholder="Ойни танланг" />
-            </View>
-
-            <FlatList
-                style={{ marginTop: 12 }}
-                data={(tab === "sales" ? sales : returns).slice().reverse()}
-                keyExtractor={(i) => i.id}
-                ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
-                renderItem={({ item }) => {
-                    const line = `${item.qty} ${item.unit} × ${item.price.toLocaleString()} so‘m = ${(item.qty * item.price).toLocaleString()} so‘m`;
-                    return (
-                        <Card style={{ padding: 12 }}>
-                            <View style={{ flexDirection: "row" }}>
-                                {/* CHAP TOMON: vaqt → nomi → miqdor+summa */}
-                                <View style={{ flex: 1, paddingRight: 8 }}>
-                                    <Text style={{ fontWeight: "700" }}>{new Date(item.created_at).toLocaleString()}</Text>
-                                    <Text style={{ color: "#555", marginTop: 2 }}>{item.productName}</Text>
-                                    <Text style={{ marginTop: 6 }}>{line}</Text>
-                                </View>
-
-                                {/* O‘NG TOMON: faqat tugmalar */}
-                                <View style={{ alignItems: "flex-end", justifyContent: "flex-start", gap: 8 }}>
-                                    <TouchableOpacity
-                                        onPress={() => onEdit(tab, item)}
-                                        style={{ paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8, borderWidth: 1, borderColor: C.border, backgroundColor: "#fff" }}
-                                    >
-                                        <Text style={{ fontWeight: "700" }}>Ред.</Text>
-                                    </TouchableOpacity>
-                                    <TouchableOpacity
-                                        onPress={() => onDelete(tab, item.id)}
-                                        style={{ paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8, backgroundColor: "#E23D3D" }}
-                                    >
-                                        <Text style={{ color: "#fff", fontWeight: "800" }}>Удал.</Text>
-                                    </TouchableOpacity>
-                                </View>
-                            </View>
-                        </Card>
-                    );
-                }}
-                ListEmptyComponent={<View style={{ marginTop: 20 }}><Text style={{ color: "#777" }}>Ma’lumot yo‘q</Text></View>}
-            />
-
-            {/* Edit modal */}
-            <Modal visible={!!editOpen} transparent animationType="fade" onRequestClose={() => setEditOpen(null)}>
-                <Pressable onPress={() => setEditOpen(null)} style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.2)", justifyContent: "center", padding: 24 }}>
-                    <View style={{ backgroundColor: "#fff", borderRadius: 12, padding: 16 }}>
-                        <Text style={{ fontWeight: "800", marginBottom: 8 }}>Таҳрирлаш</Text>
-                        <View style={{ flexDirection: "row", gap: 8 }}>
-                            <View style={{ flex: 1 }}>
-                                <Text style={{ color: C.muted, marginBottom: 4 }}>Миқдор</Text>
-                                <TextInput
-                                    placeholder="0"
-                                    value={editOpen?.qty ?? ""}
-                                    onChangeText={(v) => setEditOpen((st) => (st ? { ...st, qty: v } : st))}
-                                    keyboardType="numeric"
-                                    style={{ borderWidth: 1, borderColor: "#ddd", borderRadius: 10, padding: 10 }}
-                                />
-                            </View>
-                            <View style={{ flex: 1 }}>
-                                <Text style={{ color: C.muted, marginBottom: 4 }}>Нарх</Text>
-                                <TextInput
-                                    placeholder="0"
-                                    value={editOpen?.price ?? ""}
-                                    onChangeText={(v) => setEditOpen((st) => (st ? { ...st, price: v } : st))}
-                                    keyboardType="numeric"
-                                    style={{ borderWidth: 1, borderColor: "#ddd", borderRadius: 10, padding: 10 }}
-                                />
-                            </View>
-                        </View>
-                        <View style={{ flexDirection: "row", gap: 10, marginTop: 12 }}>
-                            <TouchableOpacity onPress={applyEdit} style={{ backgroundColor: C.primary, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 10 }}>
-                                <Text style={{ color: "#fff", fontWeight: "800" }}>Сақлаш</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity onPress={() => setEditOpen(null)} style={{ paddingHorizontal: 14, paddingVertical: 10, borderRadius: 10, borderWidth: 1, borderColor: C.border }}>
-                                <Text style={{ fontWeight: "700" }}>Бекор</Text>
-                            </TouchableOpacity>
-                        </View>
+            {/* Tablar */}
+            <View style={{ flexDirection: "row", gap: 8, marginTop: 10 }}>
+                <TouchableOpacity onPress={() => setTab("sales")} style={{ flex: 1 }}>
+                    <View
+                        style={{
+                            paddingVertical: 10,
+                            borderRadius: 12,
+                            borderWidth: 1,
+                            borderColor: tab === "sales" ? C.primary : C.border,
+                            backgroundColor: tab === "sales" ? C.primarySoft : C.white,
+                            alignItems: "center",
+                        }}
+                    >
+                        <Text style={{ fontWeight: "800", color: tab === "sales" ? C.primary : C.text }}>
+                            Сотув тарихи
+                        </Text>
                     </View>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => setTab("returns")} style={{ flex: 1 }}>
+                    <View
+                        style={{
+                            paddingVertical: 10,
+                            borderRadius: 12,
+                            borderWidth: 1,
+                            borderColor: tab === "returns" ? C.primary : C.border,
+                            backgroundColor: tab === "returns" ? C.primarySoft : C.white,
+                            alignItems: "center",
+                        }}
+                    >
+                        <Text style={{ fontWeight: "800", color: tab === "returns" ? C.primary : C.text }}>
+                            Қайтариш тарихи
+                        </Text>
+                    </View>
+                </TouchableOpacity>
+            </View>
+
+            {/* Oy bo‘yicha filtr */}
+            <View style={{ marginTop: 12 }}>
+                <H2>Ой бўйича фильтр</H2>
+                <Select value={month} onChange={setMonth} options={opts} style={{ marginTop: 6 }} />
+            </View>
+
+            {/* Listlar */}
+            {tab === "sales" ? (
+                sales.length === 0 ? (
+                    <Text style={{ color: C.muted, marginTop: 10 }}>Ҳали маълумот йўқ</Text>
+                ) : (
+                    <FlatList
+                        style={{ marginTop: 8 }}
+                        data={sales}
+                        keyExtractor={(i) => i.id}
+                        renderItem={renderSale}
+                        ItemSeparatorComponent={() => <View style={{ height: 4 }} />}
+                        contentContainerStyle={{ paddingBottom: 24 }}
+                    />
+                )
+            ) : returns.length === 0 ? (
+                <Text style={{ color: C.muted, marginTop: 10 }}>Ҳали маълумот йўқ</Text>
+            ) : (
+                <FlatList
+                    style={{ marginTop: 8 }}
+                    data={returns}
+                    keyExtractor={(i) => i.id}
+                    renderItem={renderReturn}
+                    ItemSeparatorComponent={() => <View style={{ height: 4 }} />}
+                    contentContainerStyle={{ paddingBottom: 24 }}
+                />
+            )}
+
+            {/* Edit modallar */}
+            <Modal visible={!!editSaleId} transparent animationType="fade" onRequestClose={() => setEditSaleId(null)}>
+                <Pressable onPress={() => setEditSaleId(null)} style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.2)", justifyContent: "center", padding: 24 }}>
+                    <Card style={{ padding: 14 }}>
+                        <H2>Сотувни таҳрирлаш</H2>
+                        <Text style={{ marginTop: 8 }}>Миқдор</Text>
+                        <TextInput value={qty} onChangeText={setQty} keyboardType="numeric" style={{ borderWidth: 1, borderColor: C.border, borderRadius: 10, padding: 10, marginTop: 4 }} />
+                        <Text style={{ marginTop: 8 }}>Нарх</Text>
+                        <TextInput value={price} onChangeText={setPrice} keyboardType="numeric" style={{ borderWidth: 1, borderColor: C.border, borderRadius: 10, padding: 10, marginTop: 4 }} />
+                        <View style={{ flexDirection: "row", gap: 10, marginTop: 12 }}>
+                            <Button title="Бекор" tone="neutral" onPress={() => setEditSaleId(null)} style={{ flex: 1 }} />
+                            <Button title="Сақлаш" onPress={saveSale} style={{ flex: 1 }} />
+                        </View>
+                    </Card>
+                </Pressable>
+            </Modal>
+
+            <Modal visible={!!editReturnId} transparent animationType="fade" onRequestClose={() => setEditReturnId(null)}>
+                <Pressable onPress={() => setEditReturnId(null)} style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.2)", justifyContent: "center", padding: 24 }}>
+                    <Card style={{ padding: 14 }}>
+                        <H2>Қайтаришни таҳрирлаш</H2>
+                        <Text style={{ marginTop: 8 }}>Миқдор</Text>
+                        <TextInput value={qty} onChangeText={setQty} keyboardType="numeric" style={{ borderWidth: 1, borderColor: C.border, borderRadius: 10, padding: 10, marginTop: 4 }} />
+                        <Text style={{ marginTop: 8 }}>Нарх</Text>
+                        <TextInput value={price} onChangeText={setPrice} keyboardType="numeric" style={{ borderWidth: 1, borderColor: C.border, borderRadius: 10, padding: 10, marginTop: 4 }} />
+                        <View style={{ flexDirection: "row", gap: 10, marginTop: 12 }}>
+                            <Button title="Бекор" tone="neutral" onPress={() => setEditReturnId(null)} style={{ flex: 1 }} />
+                            <Button title="Сақлаш" onPress={saveReturn} style={{ flex: 1 }} />
+                        </View>
+                    </Card>
                 </Pressable>
             </Modal>
         </View>

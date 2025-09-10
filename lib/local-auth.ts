@@ -1,7 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 const AUTH_KEY = "auth_token";
-const LOGIN = "admin@local.app";
-const PASS = "123456";
+const LOGIN = "akmalaminov";
+const PASS = "21121982";
 
 export async function signInLocal(email: string, pass: string) {
     if (email === LOGIN && pass === PASS) {

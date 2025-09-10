@@ -50,10 +50,10 @@ export function Card({ children, style }: { children: React.ReactNode; style?: a
 export function H1({ children, style }: { children: React.ReactNode; style?: any }) {
     return <Text style={[{ fontSize: 24, fontWeight: "800", color: C.text }, style]}>{children}</Text>;
 }
-
 export function H2({ children, style }: { children: React.ReactNode; style?: any }) {
     return <Text style={[{ fontSize: 16, fontWeight: "800", color: C.text }, style]}>{children}</Text>;
 }
+
 
 export function Muted({ children, style }: { children: React.ReactNode; style?: any }) {
     return <Text style={[{ color: C.muted }, style]}>{children}</Text>;

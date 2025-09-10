@@ -1,7 +1,9 @@
+// app/(main)/admin/add-store.tsx
 import { Button, C, Card, Chip, H1, H2, Input } from "@/components/UI";
 import { useAppStore } from "@/store/appStore";
 import { useSyncStore } from "@/store/syncStore";
 import type { Store, StoreType } from "@/types";
+import { Ionicons } from "@expo/vector-icons";
 import React, { useEffect, useMemo, useState } from "react";
 import { Alert, SectionList, Text, TouchableOpacity, View } from "react-native";
 
@@ -11,7 +13,6 @@ export default function AddStore() {
     const upsertStore = useAppStore((s) => s.upsertStore);
     const removeStore = useAppStore((s) => s.removeStore);
 
-    // ⬇️ online status (auto push/pull ni boshqaramiz)
     const online = useSyncStore((s) => s.online);
 
     const [name, setName] = useState("");
@@ -50,14 +51,9 @@ export default function AddStore() {
 
         await upsertStore({ id: editing?.id, name: name.trim(), type, prices: pp });
 
-        // ⬇️ Online bo'lsa — zudlik bilan push/pull (boshqa qurilmalarda ham realtime ko'rinsin)
         if (online) {
-            try {
-                await useAppStore.getState().pushNow();
-            } catch { }
-            try {
-                await useAppStore.getState().pullNow();
-            } catch { }
+            try { await useAppStore.getState().pushNow(); } catch { }
+            try { await useAppStore.getState().pullNow(); } catch { }
         }
 
         resetForm();
@@ -68,9 +64,7 @@ export default function AddStore() {
         setName(s.name);
         setType(s.type);
         const p: Record<string, string> = {};
-        Object.entries(s.prices || {}).forEach(([k, v]) => {
-            p[k] = String(v);
-        });
+        Object.entries(s.prices || {}).forEach(([k, v]) => { p[k] = String(v); });
         setPrices(p);
     };
 
@@ -82,22 +76,15 @@ export default function AddStore() {
                 style: "destructive",
                 onPress: async () => {
                     await removeStore(id);
-
-                    // ⬇️ Online bo'lsa — darhol Supabase'ga delete yuboramiz, keyin pull
                     if (online) {
-                        try {
-                            await useAppStore.getState().pushNow();
-                        } catch { }
-                        try {
-                            await useAppStore.getState().pullNow();
-                        } catch { }
+                        try { await useAppStore.getState().pushNow(); } catch { }
+                        try { await useAppStore.getState().pullNow(); } catch { }
                     }
                 },
             },
         ]);
     };
 
-    // (ixtiyoriy) bu sahifa ochilganda realtime pull yoqilganini kafolatlash
     useEffect(() => {
         useAppStore.getState().startPull().catch(() => { });
     }, []);
@@ -161,12 +148,52 @@ export default function AddStore() {
                 </View>
             )}
             renderItem={({ item }) => (
-                <Card style={{ marginTop: 8 }}>
-                    <Text style={{ fontWeight: "800", color: C.text }}>{item.name}</Text>
-                    <Text style={{ color: C.muted }}>{item.type === "branch" ? "Филиал" : "Дўкон"}</Text>
-                    <View style={{ flexDirection: "row", gap: 10, marginTop: 8 }}>
-                        <Button onPress={() => startEdit(item)} title="Таҳрирлаш" tone="neutral" />
-                        <Button onPress={() => confirmRemove(item.id)} title="Ўчириш" tone="danger" />
+                <Card style={{ marginTop: 8, padding: 12 }}>
+                    <View style={{ flexDirection: "row", alignItems: "center" }}>
+                        {/* chap: nom + turi */}
+                        <View style={{ flex: 1, paddingRight: 10 }}>
+                            <Text style={{ fontWeight: "800", color: C.text }}>{item.name}</Text>
+                            <Text style={{ color: C.muted }}>
+                                {item.type === "branch" ? "Филиал" : "Дўкон"}
+                            </Text>
+                        </View>
+
+                        {/* o‘ng: ikon tugmalar (edit / delete) */}
+                        <View style={{ flexDirection: "row", gap: 10 }}>
+                            <TouchableOpacity
+                                onPress={() => startEdit(item)}
+                                style={{
+                                    width: 40,
+                                    height: 40,
+                                    borderRadius: 20,
+                                    backgroundColor: "#fff",
+                                    borderWidth: 1,
+                                    borderColor: "#E9ECF1",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                }}
+                                accessibilityLabel="Таҳрирлаш"
+                            >
+                                <Ionicons name="create-outline" size={20} color="#770E13" />
+                            </TouchableOpacity>
+
+                            <TouchableOpacity
+                                onPress={() => confirmRemove(item.id)}
+                                style={{
+                                    width: 40,
+                                    height: 40,
+                                    borderRadius: 20,
+                                    backgroundColor: "#FCE9EA",
+                                    borderWidth: 1,
+                                    borderColor: "#F4C7CB",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                }}
+                                accessibilityLabel="Ўчириш"
+                            >
+                                <Ionicons name="close-outline" size={20} color="#E23D3D" />
+                            </TouchableOpacity>
+                        </View>
                     </View>
                 </Card>
             )}

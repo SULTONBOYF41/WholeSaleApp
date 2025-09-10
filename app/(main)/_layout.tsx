@@ -1,19 +1,14 @@
 // app/(main)/_layout.tsx
+import NetBanner from "@/components/NetBanner";
 import { signOutLocal } from "@/lib/local-auth";
 import { useAppStore } from "@/store/appStore";
 import { Ionicons } from "@expo/vector-icons";
 import { Slot, router } from "expo-router";
 import React from "react";
-import { Pressable, StyleSheet, Text, TouchableOpacity, View } from "react-native";
-
-// ⬇️ Yangi: online/offline kuzatuv va banner
-import { NetPopupOnce, NetStatusPill } from "@/components/NetBanner";
-import { useNetWatcher } from "@/lib/net";
+import { Platform, Pressable, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 
 export default function MainLayout() {
-    // Internet holatini kuzatish (global)
-    useNetWatcher();
-
     const menuOpen = useAppStore((s) => s.menuOpen);
     const setMenu = useAppStore((s) => s.setMenu);
     const currentStoreId = useAppStore((s) => s.currentStoreId);
@@ -25,22 +20,23 @@ export default function MainLayout() {
     return (
         <View style={styles.root}>
             {/* Header */}
-            <View style={styles.header}>
-                <TouchableOpacity
-                    onPress={() => setMenu(!menuOpen)}
-                    style={styles.iconBtn}
-                    accessibilityLabel="Меню"
-                >
-                    <Ionicons name="menu" size={24} />
-                </TouchableOpacity>
+            <SafeAreaView edges={["top"]} style={{ backgroundColor: "#fff" }}>
+                <View style={[styles.header, Platform.OS === "android" && { paddingTop: 8 }]}>
+                    <TouchableOpacity
+                        onPress={() => setMenu(!menuOpen)}
+                        style={styles.iconBtn}
+                        accessibilityLabel="Меню"
+                    >
+                        <Ionicons name="menu" size={24} />
+                    </TouchableOpacity>
 
-                <Text style={styles.headerTitle}>{currentStoreName}</Text>
+                    <Text style={styles.headerTitle}>{currentStoreName}</Text>
+                    <View style={{ flex: 1 }} />
+                </View>
+            </SafeAreaView>
 
-                <View style={{ flex: 1 }} />
-            </View>
-
-            {/* Online/Offline holat pill (header ostida) */}
-            <NetStatusPill />
+            {/* Online/Offline Banner */}
+            <NetBanner />
 
             {/* Content */}
             <Slot />
@@ -52,9 +48,6 @@ export default function MainLayout() {
                     <LeftMenu onClose={() => setMenu(false)} />
                 </>
             )}
-
-            {/* Bir martalik tushuntirish modal */}
-            <NetPopupOnce />
         </View>
     );
 }
@@ -117,7 +110,6 @@ function LeftMenu({ onClose }: { onClose: () => void }) {
                 <Text style={styles.adminText}>Каталог</Text>
             </TouchableOpacity>
 
-            {/* === Chiqish tugmasi (katalogdan pastda) === */}
             <View style={{ height: 8 }} />
             <TouchableOpacity onPress={logout} style={styles.logoutBtn}>
                 <Ionicons name="log-out-outline" size={18} color="#770E13" />
@@ -131,7 +123,7 @@ const styles = StyleSheet.create({
     root: { flex: 1, backgroundColor: "#fafafa" },
 
     header: {
-        height: 56,
+        minHeight: 56,
         flexDirection: "row",
         alignItems: "center",
         paddingHorizontal: 12,
@@ -144,7 +136,7 @@ const styles = StyleSheet.create({
 
     backdrop: {
         position: "absolute",
-        top: 56,
+        top: 56 + (Platform.OS === "android" ? 8 : 0),
         left: 0,
         right: 0,
         bottom: 0,
@@ -154,7 +146,7 @@ const styles = StyleSheet.create({
     drawer: {
         position: "absolute",
         left: 0,
-        top: 56,
+        top: 56 + (Platform.OS === "android" ? 8 : 0),
         bottom: 0,
         width: 300,
         backgroundColor: "#fff",
@@ -173,12 +165,7 @@ const styles = StyleSheet.create({
 
     separator: { height: 10, borderBottomWidth: 1, borderColor: "#f0f0f0", marginVertical: 6 },
 
-    adminItem: {
-        paddingVertical: 10,
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 8,
-    },
+    adminItem: { paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: 8 },
     adminText: { color: "#222", fontSize: 15 },
 
     logoutBtn: {

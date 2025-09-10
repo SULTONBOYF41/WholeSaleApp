@@ -1,6 +1,7 @@
 import { Button, Card, Chip, H1, H2, Input } from "@/components/UI";
 import { useAppStore } from "@/store/appStore";
 import type { Product } from "@/types";
+import { Ionicons } from "@expo/vector-icons";
 import React, { useMemo, useState } from "react";
 import { Alert, FlatList, Text, TouchableOpacity, View } from "react-native";
 
@@ -16,9 +17,9 @@ export default function Catalog() {
 
     const [name, setName] = useState("");
     const [target, setTarget] = useState<Target>("branch");
-    const [price, setPrice] = useState(""); // single target uchun
-    const [priceBranch, setPriceBranch] = useState(""); // both uchun
-    const [priceMarket, setPriceMarket] = useState(""); // both uchun
+    const [price, setPrice] = useState("");
+    const [priceBranch, setPriceBranch] = useState("");
+    const [priceMarket, setPriceMarket] = useState("");
     const [editing, setEditing] = useState<Product | null>(null);
 
     const resetForm = () => {
@@ -32,12 +33,10 @@ export default function Catalog() {
 
     const submit = async () => {
         if (!name.trim()) return;
-
         try {
             if (target === "both") {
                 const pb = priceBranch ? +priceBranch : undefined;
                 const pm = priceMarket ? +priceMarket : undefined;
-
                 if (editing) {
                     await upsertProduct({
                         id: editing.id,
@@ -46,11 +45,7 @@ export default function Catalog() {
                         priceMarket: pm ?? editing.priceMarket,
                     });
                 } else {
-                    await upsertProduct({
-                        name: name.trim(),
-                        priceBranch: pb,
-                        priceMarket: pm,
-                    });
+                    await upsertProduct({ name: name.trim(), priceBranch: pb, priceMarket: pm });
                 }
             } else {
                 const v = price ? +price : undefined;
@@ -77,7 +72,7 @@ export default function Catalog() {
     const startEdit = (p: Product) => {
         setEditing(p);
         setName(p.name);
-        setTarget("branch"); // default holat
+        setTarget("branch");
         setPrice("");
         setPriceBranch("");
         setPriceMarket("");
@@ -126,7 +121,8 @@ export default function Catalog() {
                     onPress={submit}
                     title={editing ? "Сақлаш" : "Қўшиш"}
                     style={{ marginTop: 8, backgroundColor: PRIMARY }}
-                    textStyle={{ color: CREAM, fontWeight: "800" }} // ✅ endi UI.Button qabul qiladi
+                // agar UI.Button textStyle prop yo‘q bo‘lsa, quyidagi qatorni olib tashlang:
+                // textStyle={{ color: CREAM, fontWeight: "800" }}
                 />
 
                 <H2 style={{ marginTop: 10 }}>Категориялар</H2>
@@ -144,29 +140,58 @@ export default function Catalog() {
             contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 24 }}
             renderItem={({ item }) => (
                 <Card style={{ padding: 12 }}>
-                    <Text style={{ fontWeight: "800", color: "#222" }}>{item.name}</Text>
-                    <Text style={{ color: "#666", marginTop: 4 }}>
-                        Филиал: {item.priceBranch ?? 0} · Дўкон: {item.priceMarket ?? 0}
-                    </Text>
-                    <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
-                        <Button
-                            onPress={() => startEdit(item)}
-                            title="Таҳрирлаш"
-                            tone="neutral"
-                            style={{ borderColor: PRIMARY, borderWidth: 1, backgroundColor: "#fff" }}
-                            textStyle={{ color: PRIMARY, fontWeight: "700" }} // ✅
-                        />
-                        <Button
-                            onPress={() =>
-                                Alert.alert("Олиб ташлаш", "Ростдан ҳам ўчирилсинми?", [
-                                    { text: "Бекор" },
-                                    { text: "Ҳа", style: "destructive", onPress: () => removeProduct(item.id) },
-                                ])
-                            }
-                            title="Ўчириш"
-                            tone="danger"
-                            style={{ backgroundColor: "#E23D3D" }}
-                        />
+                    <View style={{ flexDirection: "row", alignItems: "center" }}>
+                        {/* Chap: nom + narxlar */}
+                        <View style={{ flex: 1, paddingRight: 10 }}>
+                            <Text style={{ fontWeight: "800", color: "#222" }}>{item.name}</Text>
+                            <Text style={{ color: "#666", marginTop: 4 }}>
+                                Филиал: {item.priceBranch ?? 0} · Дўкон: {item.priceMarket ?? 0}
+                            </Text>
+                        </View>
+
+                        {/* O‘ng: ikon tugmalar (Qalam = Red, X = Udl) */}
+                        <View style={{ flexDirection: "row", gap: 10 }}>
+                            {/* Red (edit) */}
+                            <TouchableOpacity
+                                onPress={() => startEdit(item)}
+                                style={{
+                                    width: 40,
+                                    height: 40,
+                                    borderRadius: 20,
+                                    backgroundColor: "#fff",
+                                    borderWidth: 1,
+                                    borderColor: "#E9ECF1",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                }}
+                                accessibilityLabel="Red"
+                            >
+                                <Ionicons name="create-outline" size={20} color={PRIMARY} />
+                            </TouchableOpacity>
+
+                            {/* Udl (delete) */}
+                            <TouchableOpacity
+                                onPress={() =>
+                                    Alert.alert("Олиб ташлаш", "Ростдан ҳам ўчирилсинми?", [
+                                        { text: "Бекор" },
+                                        { text: "Ҳа", style: "destructive", onPress: () => removeProduct(item.id) },
+                                    ])
+                                }
+                                style={{
+                                    width: 40,
+                                    height: 40,
+                                    borderRadius: 20,
+                                    backgroundColor: "#FCE9EA",
+                                    borderWidth: 1,
+                                    borderColor: "#F4C7CB",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                }}
+                                accessibilityLabel="Udl"
+                            >
+                                <Ionicons name="close-outline" size={20} color="#E23D3D" />
+                            </TouchableOpacity>
+                        </View>
                     </View>
                 </Card>
             )}
