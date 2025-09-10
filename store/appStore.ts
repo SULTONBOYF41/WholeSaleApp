@@ -173,15 +173,15 @@ export const useAppStore = create<AppState>()((set, get) => ({
     },
 
     async addSale(s) {
-        const item: Sale = { id: `sa-${uid()}`, created_at: Date.now(), ...s };
+        const item: Sale = {
+            id: `sa-${uid()}`,
+            created_at: Date.now(),
+            ...s, // s ichida batchId bo‘lishi mumkin
+        };
         const arr = [...get().sales, item];
-        set({ sales: arr });
-        await setJSON(K.SALES, arr);
-
-        const q = { id: `q-${uid()}`, type: "sale_create", payload: item } as unknown as QueueItem;
-        const qq = [...get().queue, q];
-        set({ queue: qq });
-        await setJSON(K.QUEUE, qq);
+        set({ sales: arr }); await setJSON(K.SALES, arr);
+        const q: QueueItem = { id: `q-${uid()}`, type: "sale_create", payload: item };
+        const qq = [...get().queue, q]; set({ queue: qq }); await setJSON(K.QUEUE, qq);
         get().schedulePush();
     },
 
@@ -312,6 +312,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
                         qty: s.qty,
                         unit: s.unit,
                         price: s.price,
+                        batch_id: s.batchId ?? null, // ⬅️
                         created_at: new Date(s.created_at).toISOString(),
                     });
                     if (error) throw error;
@@ -408,9 +409,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
                 unit: x.unit,
                 price: x.price,
                 created_at: new Date(x.created_at).getTime(),
+                batchId: x.batch_id ?? undefined, // ⬅️
             }));
-            set({ sales });
-            await setJSON(K.SALES, sales);
+            set({ sales }); await setJSON(K.SALES, sales);
         }
         if (re.data) {
             const returns: Ret[] = re.data.map((x: any) => ({

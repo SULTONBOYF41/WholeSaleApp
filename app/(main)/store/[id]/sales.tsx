@@ -77,22 +77,21 @@ export default function Sales() {
         setRows((r) => (r.length > 1 ? r.filter((x) => x.key !== key) : r));
 
     const saveAll = async () => {
-        setSaving(true);
-        try {
-            for (const r of rows) {
-                if (!r.product || !r.qty || !r.price) continue;
-                await addSale({
-                    storeId: id!,
-                    productName: r.product.name,
-                    qty: +r.qty,
-                    price: +r.price,
-                    unit: r.unit,
-                });
-            }
-            setRows([{ key: "r1", qty: "", price: "", unit: "дона" }]);
-        } finally {
-            setSaving(false);
+        // bir paket ID
+        const batchId = "b-" + Date.now().toString(36);
+
+        for (const r of rows) {
+            if (!r.product || !r.qty || !r.price) continue;
+            await addSale({
+                storeId: id!,
+                productName: r.product.name,
+                qty: +r.qty,
+                price: +r.price,
+                unit: r.unit,
+                batchId, // ⬅️ hammasiga bir xil ID
+            });
         }
+        setRows([{ key: "r1", qty: "", price: "", unit: "дона" }]);
     };
 
     const saveCash = async () => {

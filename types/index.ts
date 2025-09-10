@@ -5,8 +5,8 @@ export type Store = { id: string; type: StoreType; name: string; prices: Record<
 export type Category = { id: string; name: string };
 export type Product = { id: string; name: string; priceBranch?: number; priceMarket?: number };
 
-export type Sale = { id: string; storeId: string; productName: string; qty: number; unit: Unit; price: number; created_at: number };
-export type Ret = { id: string; storeId: string; productName: string; qty: number; unit: Unit; price: number; created_at: number };
+export type Sale = { id: string; storeId: string; productName: string; qty: number; unit: Unit; price: number; created_at: number; batchId?: string; };
+export type Ret = { id: string; storeId: string; productName: string; qty: number; unit: Unit; price: number; created_at: number; batchId?: string; };
 
 export type CashReceipt = { id: string; storeId: string; amount: number; created_at: number };
 

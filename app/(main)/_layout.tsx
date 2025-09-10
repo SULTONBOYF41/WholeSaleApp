@@ -4,8 +4,8 @@ import { signOutLocal } from "@/lib/local-auth";
 import { useAppStore } from "@/store/appStore";
 import { Ionicons } from "@expo/vector-icons";
 import { Slot, router } from "expo-router";
-import React from "react";
-import { Platform, Pressable, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import React, { useEffect, useRef, useState } from "react";
+import { Animated, Platform, Pressable, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 export default function MainLayout() {
@@ -14,45 +14,67 @@ export default function MainLayout() {
     const currentStoreId = useAppStore((s) => s.currentStoreId);
     const stores = useAppStore((s) => s.stores);
 
-    const currentStoreName =
-        stores.find((x) => x.id === currentStoreId)?.name ?? "Рукшона — Меню";
+    const currentStoreName = stores.find((x) => x.id === currentStoreId)?.name ?? "Рукшона — Меню";
+
+    // Header + NetBanner umumiy balandligini o'lchaymiz
+    const [topH, setTopH] = useState<number>(56 + (Platform.OS === "android" ? 8 : 0) + 32); // taxminiy default
+    const slide = useRef(new Animated.Value(0)).current; // 0: ko'rinadi, 1: yashirin (menu ochiq)
+
+    useEffect(() => {
+        Animated.timing(slide, {
+            toValue: menuOpen ? 1 : 0,
+            duration: 220,
+            useNativeDriver: true,
+        }).start();
+    }, [menuOpen]);
+
+    const translateY = slide.interpolate({
+        inputRange: [0, 1],
+        outputRange: [0, -topH], // konteynerni tepaga chiqarib yuboramiz
+    });
+
+    const overlayTop = menuOpen ? 0 : topH; // menu ochiq bo'lsa to'liq yuqoridan boshlab yopsin
 
     return (
         <View style={styles.root}>
-            {/* Header */}
-            <SafeAreaView edges={["top"]} style={{ backgroundColor: "#fff" }}>
-                <View style={[styles.header, Platform.OS === "android" && { paddingTop: 8 }]}>
-                    <TouchableOpacity
-                        onPress={() => setMenu(!menuOpen)}
-                        style={styles.iconBtn}
-                        accessibilityLabel="Меню"
-                    >
-                        <Ionicons name="menu" size={24} />
-                    </TouchableOpacity>
+            {/* Top (Header + Banner) */}
+            <Animated.View
+                style={{ transform: [{ translateY }] }}
+                onLayout={(e) => setTopH(Math.ceil(e.nativeEvent.layout.height))}
+            >
+                <SafeAreaView edges={["top"]} style={{ backgroundColor: "#fff" }}>
+                    <View style={[styles.header, Platform.OS === "android" && { paddingTop: 8 }]}>
+                        <TouchableOpacity onPress={() => setMenu(!menuOpen)} style={styles.iconBtn} accessibilityLabel="Меню">
+                            <Ionicons name="menu" size={24} />
+                        </TouchableOpacity>
 
-                    <Text style={styles.headerTitle}>{currentStoreName}</Text>
-                    <View style={{ flex: 1 }} />
-                </View>
-            </SafeAreaView>
+                        <Text style={styles.headerTitle}>{currentStoreName}</Text>
+                        <View style={{ flex: 1 }} />
+                    </View>
+                </SafeAreaView>
 
-            {/* Online/Offline Banner */}
-            <NetBanner />
+                {/* Online/Offline Banner (balandligi animatsiyali) */}
+                <NetBanner />
+            </Animated.View>
 
             {/* Content */}
-            <Slot />
+            <View style={{ flex: 1 }}>
+                {/* Top bo'lim sirg'alganiga qaramay kontent to'g'ri pozitsiyada */}
+                <Slot />
+            </View>
 
-            {/* Left Drawer + backdrop */}
+            {/* Left Drawer + Backdrop */}
             {menuOpen && (
                 <>
-                    <Pressable style={styles.backdrop} onPress={() => setMenu(false)} />
-                    <LeftMenu onClose={() => setMenu(false)} />
+                    <Pressable style={[styles.backdrop, { top: overlayTop }]} onPress={() => setMenu(false)} />
+                    <LeftMenu onClose={() => setMenu(false)} top={overlayTop} />
                 </>
             )}
         </View>
     );
 }
 
-function LeftMenu({ onClose }: { onClose: () => void }) {
+function LeftMenu({ onClose, top }: { onClose: () => void; top: number }) {
     const stores = useAppStore((s) => s.stores);
     const setCurrentStore = useAppStore((s) => s.setCurrentStore);
 
@@ -77,7 +99,7 @@ function LeftMenu({ onClose }: { onClose: () => void }) {
     };
 
     return (
-        <View style={styles.drawer}>
+        <View style={[styles.drawer, { top }]}>
             <Text style={styles.sectionTitleRed}>Филиаллар</Text>
             {branches.length === 0 && <Text style={styles.emptyHint}>Ҳали филиал қўшилмаган</Text>}
             {branches.map((b) => (
@@ -136,7 +158,6 @@ const styles = StyleSheet.create({
 
     backdrop: {
         position: "absolute",
-        top: 56 + (Platform.OS === "android" ? 8 : 0),
         left: 0,
         right: 0,
         bottom: 0,
@@ -146,7 +167,6 @@ const styles = StyleSheet.create({
     drawer: {
         position: "absolute",
         left: 0,
-        top: 56 + (Platform.OS === "android" ? 8 : 0),
         bottom: 0,
         width: 300,
         backgroundColor: "#fff",
