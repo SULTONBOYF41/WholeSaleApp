@@ -2,9 +2,20 @@
 import { useAppStore } from "@/store/appStore";
 import { useSyncStore } from "@/store/syncStore";
 import { Ionicons } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import NetInfo from "@react-native-community/netinfo";
-import React, { useEffect, useRef } from "react";
-import { Animated, Platform, StyleSheet, Text, TouchableOpacity } from "react-native";
+import React, { useEffect, useRef, useState } from "react";
+import {
+    Animated,
+    Platform,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
+} from "react-native";
+
+// Biz yaratgan offline navbat kalitlari
+const QUEUE_KEYS = ["expenses_queue_v1"];
 
 const COLORS = {
     text: "#1F2937",
@@ -22,19 +33,22 @@ const COLORS = {
 export default function NetBanner() {
     const online = useSyncStore((s) => s.online);
     const setOnline = useSyncStore((s) => s.setOnline);
+    const [queued, setQueued] = useState(0);
+    const [pushing, setPushing] = useState(false);
 
     // ⚠️ height va opacity uchun native driver ishlatilmaydi
     const heightAnim = useRef(new Animated.Value(0)).current;
     const opacityAnim = useRef(new Animated.Value(0)).current;
 
     useEffect(() => {
-        const targetH = online ? 32 : 40;
+        const targetH = 40; // doim 40px ko'rsak ham bo'ladi, matn sig'adi
         Animated.parallel([
             Animated.timing(heightAnim, { toValue: targetH, duration: 200, useNativeDriver: false }),
             Animated.timing(opacityAnim, { toValue: 1, duration: 200, useNativeDriver: false }),
         ]).start();
-    }, [online, heightAnim, opacityAnim]);
+    }, []);
 
+    // Online holatini kuzatamiz va push/pull trigger
     useEffect(() => {
         let mounted = true;
 
@@ -50,6 +64,7 @@ export default function NetBanner() {
             if (prev !== on) {
                 setOnline(on);
                 if (!prev && on) {
+                    // online bo'ldi -> push, so'ng pull
                     const { pushNow, pullNow } = useAppStore.getState();
                     pushNow().catch(() => { });
                     setTimeout(() => pullNow().catch(() => { }), 250);
@@ -63,28 +78,82 @@ export default function NetBanner() {
         };
     }, [setOnline]);
 
-    const onRetry = async () => {
+    // Navbat sonini AsyncStorage'dan o'qib turamiz
+    async function readQueueCount() {
+        try {
+            let sum = 0;
+            for (const key of QUEUE_KEYS) {
+                const raw = await AsyncStorage.getItem(key);
+                if (raw) {
+                    const arr = JSON.parse(raw);
+                    if (Array.isArray(arr)) sum += arr.length;
+                }
+            }
+            setQueued(sum);
+        } catch {
+            // ignore
+        }
+    }
+
+    useEffect(() => {
+        // boshlang'ich o'qish
+        readQueueCount();
+        // har 1.5s da tekshir (yengil polling, event yo'q)
+        const t = setInterval(readQueueCount, 1500);
+        return () => clearInterval(t);
+    }, []);
+
+    const onRetryOrSync = async () => {
         const { pushNow, pullNow } = useAppStore.getState();
-        try { await pushNow(); } catch { }
-        try { await pullNow(); } catch { }
+        try {
+            setPushing(true);
+            await pushNow();
+            await pullNow();
+        } catch {
+            // ignore
+        } finally {
+            setPushing(false);
+            readQueueCount();
+        }
     };
 
     const bg = online ? COLORS.greenBg : COLORS.redBg;
     const border = online ? COLORS.greenBorder : COLORS.redBorder;
     const dot = online ? COLORS.greenDot : COLORS.redDot;
 
+    const leftIcon = online ? "checkmark-circle" : "cloud-offline";
+
+    const statusText = online ? "Онлайн" : "Оффлайн режим: амаллар навбатга сақланади";
+    const queueText =
+        queued > 0 ? ` • Навбатда: ${queued} амал` : online ? " • Навбат йўқ" : "";
+
     return (
-        <Animated.View style={[styles.wrap, { height: heightAnim, opacity: opacityAnim, backgroundColor: bg, borderBottomColor: border }]}>
-            <Animated.View style={styles.inner}>
-                <Ionicons name={online ? "checkmark-circle" : "cloud-offline"} size={18} color={dot} style={{ marginRight: 6 }} />
-                <Animated.View style={[styles.dot, { backgroundColor: dot }]} />
-                <Text style={styles.text}>{online ? "Онлайн" : "Оффлайн режим: амаллар навбатга сақланади"}</Text>
-                {!online && (
-                    <TouchableOpacity onPress={onRetry} style={styles.retryBtn}>
-                        <Text style={styles.retryText}>Retry</Text>
+        <Animated.View
+            style={[
+                styles.wrap,
+                { height: heightAnim, opacity: opacityAnim, backgroundColor: bg, borderBottomColor: border },
+            ]}
+        >
+            <View style={styles.inner}>
+                <Ionicons name={leftIcon as any} size={18} color={dot} style={{ marginRight: 6 }} />
+                <View style={[styles.dot, { backgroundColor: dot }]} />
+                <Text style={styles.text} numberOfLines={1}>
+                    {statusText}
+                    <Text style={{ fontWeight: "700" }}>{queueText}</Text>
+                </Text>
+
+                {(!online || queued > 0) && (
+                    <TouchableOpacity
+                        onPress={onRetryOrSync}
+                        style={[styles.retryBtn, !online ? styles.retryDanger : styles.retryNeutral]}
+                        accessibilityRole="button"
+                    >
+                        <Text style={[styles.retryText, !online && { color: COLORS.primary }]}>
+                            {pushing ? (online ? "Sync..." : "Retry...") : online ? "Sync" : "Retry"}
+                        </Text>
                     </TouchableOpacity>
                 )}
-            </Animated.View>
+            </View>
         </Animated.View>
     );
 }
@@ -95,7 +164,7 @@ const styles = StyleSheet.create({
     },
     inner: {
         flex: 1,
-        minHeight: Platform.select({ ios: 32, android: 32 })!,
+        minHeight: Platform.select({ ios: 40, android: 40 })!,
         paddingHorizontal: 12,
         flexDirection: "row",
         alignItems: "center",
@@ -105,8 +174,18 @@ const styles = StyleSheet.create({
     text: { flex: 1, color: COLORS.text, fontWeight: "700" },
     dot: { width: 8, height: 8, borderRadius: 4 },
     retryBtn: {
-        paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8,
-        backgroundColor: COLORS.redBtnBg, borderWidth: 1, borderColor: COLORS.redBtnBorder,
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        borderRadius: 10,
+        borderWidth: 1,
     },
-    retryText: { color: COLORS.primary, fontWeight: "800" },
+    retryDanger: {
+        backgroundColor: COLORS.redBtnBg,
+        borderColor: COLORS.redBtnBorder,
+    },
+    retryNeutral: {
+        backgroundColor: "#fff",
+        borderColor: "#e8e8ef",
+    },
+    retryText: { fontWeight: "800" },
 });
