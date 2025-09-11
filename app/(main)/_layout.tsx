@@ -3,9 +3,20 @@ import NetBanner from "@/components/NetBanner";
 import { signOutLocal } from "@/lib/local-auth";
 import { useAppStore } from "@/store/appStore";
 import { Ionicons } from "@expo/vector-icons";
-import { Slot, router } from "expo-router";
-import React, { useEffect, useRef, useState } from "react";
-import { Animated, Dimensions, Easing, Platform, Pressable, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import type { Href } from "expo-router";
+import { Slot, router, usePathname } from "expo-router";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import {
+    Animated,
+    Dimensions,
+    Easing,
+    Platform,
+    Pressable,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 const { width: SCREEN_W } = Dimensions.get("window");
@@ -17,7 +28,35 @@ export default function MainLayout() {
     const currentStoreId = useAppStore((s) => s.currentStoreId);
     const stores = useAppStore((s) => s.stores);
 
-    const currentStoreName = stores.find((x) => x.id === currentStoreId)?.name ?? "Рукшона — Меню";
+    const pathname = usePathname();
+
+    // Filial/do‘kon nomi (default)
+    const defaultStoreName = useMemo(() => {
+        return stores.find((x) => x.id === currentStoreId)?.name ?? "Рукшона — Меню";
+    }, [stores, currentStoreId]);
+
+    // Header sarlavhasini yo‘lga qarab aniqlash
+    const headerTitle = useMemo(() => {
+        const p = pathname ?? "";
+
+        // Xarajatlar
+        if (p.startsWith("/(main)/expenses")) {
+            if (p.includes("/family")) return "Xarajatlar — Oilaviy";
+            if (p.includes("/shop")) return "Xarajatlar — Do'kon";
+            if (p.includes("/bank")) return "Xarajatlar — Bank";
+            return "Xarajatlar — Hisobot";
+        }
+
+        // Admin sahifalari
+        if (p.startsWith("/(main)/admin")) {
+            if (p.includes("/catalog")) return "Админ — Каталог";
+            if (p.includes("/add-store")) return "Админ — Филиал/Дўкон қўшиш";
+            return "Админ";
+        }
+
+        // Aks holda filial/do‘kon nomi
+        return defaultStoreName;
+    }, [pathname, defaultStoreName]);
 
     // Top (Header + NetBanner) balandligi
     const [topH, setTopH] = useState<number>(56 + (Platform.OS === "android" ? 8 : 0) + 32);
@@ -52,7 +91,7 @@ export default function MainLayout() {
         outputRange: [-DRAWER_W, 0],
     });
 
-    // Backdrop yuqori chegarasi (menyu ochiq paytda to'liq ekranga yoyilsin)
+    // Backdrop yuqori chegarasi
     const overlayTop = menuOpen ? 0 : topH;
 
     return (
@@ -72,7 +111,7 @@ export default function MainLayout() {
                             <Ionicons name="menu" size={24} />
                         </TouchableOpacity>
 
-                        <Text style={styles.headerTitle}>{currentStoreName}</Text>
+                        <Text style={styles.headerTitle}>{headerTitle}</Text>
                         <View style={{ flex: 1 }} />
                     </View>
                 </SafeAreaView>
@@ -89,10 +128,7 @@ export default function MainLayout() {
             {/* Backdrop (fade) */}
             <Animated.View
                 pointerEvents={menuOpen ? "auto" : "none"}
-                style={[
-                    styles.backdrop,
-                    { top: overlayTop, opacity: backdropOpacity },
-                ]}
+                style={[styles.backdrop, { top: overlayTop, opacity: backdropOpacity }]}
             >
                 <Pressable style={{ flex: 1 }} onPress={() => setMenu(false)} />
             </Animated.View>
@@ -104,9 +140,7 @@ export default function MainLayout() {
                     { top: overlayTop, width: DRAWER_W, transform: [{ translateX: drawerTX }] },
                 ]}
             >
-                <LeftMenu
-                    onClose={() => setMenu(false)}
-                />
+                <LeftMenu onClose={() => setMenu(false)} />
             </Animated.View>
         </View>
     );
@@ -128,6 +162,11 @@ function LeftMenu({ onClose }: { onClose: () => void }) {
     const goAdmin = (href: "/(main)/admin/add-store" | "/(main)/admin/catalog") => {
         onClose();
         router.push(href);
+    };
+
+    const goExpenses = () => {
+        onClose();
+        router.push("/(main)/expenses" as Href);
     };
 
     const logout = async () => {
@@ -170,6 +209,13 @@ function LeftMenu({ onClose }: { onClose: () => void }) {
                 <Text style={styles.adminText}>Каталог</Text>
             </TouchableOpacity>
 
+            <View style={styles.separator} />
+            <Text style={styles.sectionTitle}>Moliya</Text>
+            <TouchableOpacity onPress={goExpenses} style={styles.adminItem}>
+                <Ionicons name="cash-outline" size={18} color="#333" />
+                <Text style={styles.adminText}>Xarajatlar</Text>
+            </TouchableOpacity>
+
             <View style={{ height: 8 }} />
             <TouchableOpacity onPress={logout} style={styles.logoutBtn}>
                 <Ionicons name="log-out-outline" size={18} color="#770E13" />
@@ -209,7 +255,6 @@ const styles = StyleSheet.create({
         backgroundColor: "#fff",
         borderRightWidth: 1,
         borderColor: "#eee",
-        // soyalar
         shadowColor: "#000",
         shadowOpacity: 0.12,
         shadowRadius: 8,
@@ -217,9 +262,7 @@ const styles = StyleSheet.create({
         elevation: 6,
     },
 
-    drawerInner: {
-        padding: 14,
-    },
+    drawerInner: { padding: 14 },
 
     sectionTitleRed: { fontWeight: "800", color: "#770E13", marginBottom: 6 },
     sectionTitle: { fontWeight: "800", color: "#222", marginTop: 4, marginBottom: 6 },
