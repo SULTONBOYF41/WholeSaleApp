@@ -22,6 +22,14 @@ import { SafeAreaView } from "react-native-safe-area-context";
 const { width: SCREEN_W } = Dimensions.get("window");
 const DRAWER_W = Math.min(300, Math.floor(SCREEN_W * 0.86));
 
+// /(group) segmentlarni olib tashlab, trailing slashni tozalaymiz
+const normalize = (p?: string | null) => {
+    if (!p) return "/";
+    let s = p.replace(/\/\([^/]+\)/g, "");
+    if (s.length > 1 && s.endsWith("/")) s = s.slice(0, -1);
+    return s;
+};
+
 export default function MainLayout() {
     const menuOpen = useAppStore((s) => s.menuOpen);
     const setMenu = useAppStore((s) => s.setMenu);
@@ -29,6 +37,7 @@ export default function MainLayout() {
     const stores = useAppStore((s) => s.stores);
 
     const pathname = usePathname();
+    const np = normalize(pathname);
 
     // Filial/do‘kon nomi (default)
     const defaultStoreName = useMemo(() => {
@@ -37,26 +46,22 @@ export default function MainLayout() {
 
     // Header sarlavhasini yo‘lga qarab aniqlash
     const headerTitle = useMemo(() => {
-        const p = pathname ?? "";
-
         // Xarajatlar
-        if (p.startsWith("/(main)/expenses")) {
-            if (p.includes("/family")) return "Xarajatlar — Oilaviy";
-            if (p.includes("/shop")) return "Xarajatlar — Do'kon";
-            if (p.includes("/bank")) return "Xarajatlar — Bank";
+        if (np.startsWith("/expenses")) {
+            if (np.includes("/family")) return "Xarajatlar — Oilaviy";
+            if (np.includes("/shop")) return "Xarajatlar — Do'kon";
+            if (np.includes("/bank")) return "Xarajatlar — Bank";
             return "Xarajatlar — Hisobot";
         }
-
-        // Admin sahifalari
-        if (p.startsWith("/(main)/admin")) {
-            if (p.includes("/catalog")) return "Админ — Каталог";
-            if (p.includes("/add-store")) return "Админ — Филиал/Дўкон қўшиш";
+        // Admin
+        if (np.startsWith("/admin")) {
+            if (np.includes("/catalog")) return "Админ — Каталог";
+            if (np.includes("/add-store")) return "Админ — Филиал/Дўкон қўшиш";
             return "Админ";
         }
-
         // Aks holda filial/do‘kon nomi
         return defaultStoreName;
-    }, [pathname, defaultStoreName]);
+    }, [np, defaultStoreName]);
 
     // Top (Header + NetBanner) balandligi
     const [topH, setTopH] = useState<number>(56 + (Platform.OS === "android" ? 8 : 0) + 32);
@@ -166,7 +171,7 @@ function LeftMenu({ onClose }: { onClose: () => void }) {
 
     const goExpenses = () => {
         onClose();
-        router.push("/(main)/expenses" as Href);
+        router.push("/(main)/expenses" as Href); // index -> report ga redirect qilgan bo'lsangiz shu qoladi
     };
 
     const logout = async () => {
