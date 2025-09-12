@@ -1,10 +1,11 @@
 // app/(main)/admin/add-store.tsx
 import { Button, C, Card, Chip, H1, H2, Input } from "@/components/UI";
+import { supabase } from "@/lib/supabase";
 import { useAppStore } from "@/store/appStore";
 import { useSyncStore } from "@/store/syncStore";
 import type { Store, StoreType } from "@/types";
 import { Ionicons } from "@expo/vector-icons";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, SectionList, Text, TouchableOpacity, View } from "react-native";
 
 export default function AddStore() {
@@ -52,8 +53,12 @@ export default function AddStore() {
         await upsertStore({ id: editing?.id, name: name.trim(), type, prices: pp });
 
         if (online) {
-            try { await useAppStore.getState().pushNow(); } catch { }
-            try { await useAppStore.getState().pullNow(); } catch { }
+            try {
+                await useAppStore.getState().pushNow();
+            } catch { }
+            try {
+                await useAppStore.getState().pullNow();
+            } catch { }
         }
 
         resetForm();
@@ -64,7 +69,9 @@ export default function AddStore() {
         setName(s.name);
         setType(s.type);
         const p: Record<string, string> = {};
-        Object.entries(s.prices || {}).forEach(([k, v]) => { p[k] = String(v); });
+        Object.entries(s.prices || {}).forEach(([k, v]) => {
+            p[k] = String(v);
+        });
         setPrices(p);
     };
 
@@ -77,16 +84,58 @@ export default function AddStore() {
                 onPress: async () => {
                     await removeStore(id);
                     if (online) {
-                        try { await useAppStore.getState().pushNow(); } catch { }
-                        try { await useAppStore.getState().pullNow(); } catch { }
+                        try {
+                            await useAppStore.getState().pushNow();
+                        } catch { }
+                        try {
+                            await useAppStore.getState().pullNow();
+                        } catch { }
                     }
                 },
             },
         ]);
     };
 
+    // --- Realtime + polling ---
+    const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
     useEffect(() => {
+        // Boshlang'ich sinxron
         useAppStore.getState().startPull().catch(() => { });
+        useAppStore.getState().pullNow().catch(() => { });
+
+        // Realtime obunalar
+        const chStores = supabase
+            .channel("rt-stores")
+            .on(
+                "postgres_changes",
+                { event: "*", schema: "public", table: "stores" },
+                () => useAppStore.getState().pullNow().catch(() => { })
+            )
+            .subscribe();
+
+        const chProducts = supabase
+            .channel("rt-products-for-add-store")
+            .on(
+                "postgres_changes",
+                { event: "*", schema: "public", table: "products" },
+                () => useAppStore.getState().pullNow().catch(() => { })
+            )
+            .subscribe();
+
+        // Rezerv polling
+        pollRef.current = setInterval(() => {
+            useAppStore.getState().pullNow().catch(() => { });
+        }, 15000);
+
+        return () => {
+            if (pollRef.current !== null) {
+                clearInterval(pollRef.current);
+                pollRef.current = null;
+            }
+            supabase.removeChannel(chStores);
+            supabase.removeChannel(chProducts);
+        };
     }, []);
 
     const ListHeader = useMemo(

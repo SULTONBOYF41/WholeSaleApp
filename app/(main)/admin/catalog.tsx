@@ -1,14 +1,15 @@
+// app/(main)/admin/catalog.tsx
 import { Button, Card, Chip, H1, H2, Input } from "@/components/UI";
+import { supabase } from "@/lib/supabase";
 import { useAppStore } from "@/store/appStore";
 import type { Product } from "@/types";
 import { Ionicons } from "@expo/vector-icons";
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, FlatList, Text, TouchableOpacity, View } from "react-native";
 
 type Target = "branch" | "market" | "both";
 
 const PRIMARY = "#770E13";
-const CREAM = "#F6EAD4";
 
 export default function Catalog() {
     const products = useAppStore((s) => s.products);
@@ -78,6 +79,38 @@ export default function Catalog() {
         setPriceMarket("");
     };
 
+    // --- Realtime + polling ---
+    const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+    useEffect(() => {
+        // Boshlang'ich sinxron
+        useAppStore.getState().startPull().catch(() => { });
+        useAppStore.getState().pullNow().catch(() => { });
+
+        // Realtime: products
+        const ch = supabase
+            .channel("rt-products")
+            .on(
+                "postgres_changes",
+                { event: "*", schema: "public", table: "products" },
+                () => useAppStore.getState().pullNow().catch(() => { })
+            )
+            .subscribe();
+
+        // Rezerv polling
+        pollRef.current = setInterval(() => {
+            useAppStore.getState().pullNow().catch(() => { });
+        }, 15000);
+
+        return () => {
+            if (pollRef.current !== null) {
+                clearInterval(pollRef.current);
+                pollRef.current = null;
+            }
+            supabase.removeChannel(ch);
+        };
+    }, []);
+
     const Header = useMemo(
         () => (
             <View style={{ padding: 16, gap: 10 }}>
@@ -121,8 +154,6 @@ export default function Catalog() {
                     onPress={submit}
                     title={editing ? "Сақлаш" : "Қўшиш"}
                     style={{ marginTop: 8, backgroundColor: PRIMARY }}
-                // agar UI.Button textStyle prop yo‘q bo‘lsa, quyidagi qatorni olib tashlang:
-                // textStyle={{ color: CREAM, fontWeight: "800" }}
                 />
 
                 <H2 style={{ marginTop: 10 }}>Категориялар</H2>
@@ -149,9 +180,8 @@ export default function Catalog() {
                             </Text>
                         </View>
 
-                        {/* O‘ng: ikon tugmalar (Qalam = Red, X = Udl) */}
+                        {/* O‘ng: edit / delete */}
                         <View style={{ flexDirection: "row", gap: 10 }}>
-                            {/* Red (edit) */}
                             <TouchableOpacity
                                 onPress={() => startEdit(item)}
                                 style={{
@@ -169,7 +199,6 @@ export default function Catalog() {
                                 <Ionicons name="create-outline" size={20} color={PRIMARY} />
                             </TouchableOpacity>
 
-                            {/* Udl (delete) */}
                             <TouchableOpacity
                                 onPress={() =>
                                     Alert.alert("Олиб ташлаш", "Ростдан ҳам ўчирилсинми?", [
