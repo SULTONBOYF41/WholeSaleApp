@@ -1,10 +1,14 @@
+// app/(main)/store/[id]/sales.tsx
+import Toast from "@/components/Toast"; // ← qo'shildi
+import { supabase } from "@/lib/supabase";
 import { useAppStore } from "@/store/appStore";
+import { useSyncStore } from "@/store/syncStore";
+import { useToastStore } from "@/store/toastStore"; // ← qo'shildi
 import type { Product, Unit } from "@/types";
 import { Ionicons } from "@expo/vector-icons";
-import { useLocalSearchParams } from "expo-router";
-import React, { useMemo, useState } from "react";
+import { useFocusEffect, useLocalSearchParams } from "expo-router";
+import React, { useCallback, useMemo, useRef, useState } from "react";
 import {
-    ActivityIndicator,
     FlatList,
     KeyboardAvoidingView,
     Modal,
@@ -19,32 +23,108 @@ import {
 
 type Row = { key: string; product?: Product; qty: string; price: string; unit: Unit };
 
+type CashReceipt = {
+    id: string;
+    store_id: string;
+    amount: number;
+    note?: string | null;
+    created_at: string;
+};
+
 export default function Sales() {
     const { id } = useLocalSearchParams<{ id: string }>();
+
     const addSale = useAppStore((s) => s.addSale);
-    const addCash = useAppStore((s) => s.addCash);
-    const updateCash = useAppStore((s) => s.updateCash);
-    const removeCash = useAppStore((s) => s.removeCash);
+
+    const addCashOffline = useAppStore((s) => s.addCash);
+    const updateCashOffline = useAppStore((s) => s.updateCash);
+    const removeCashOffline = useAppStore((s) => s.removeCash);
 
     const products = useAppStore((s) => s.products);
     const stores = useAppStore((s) => s.stores);
-    const receiptsAll = useAppStore((s) => s.cashReceipts);
-
-    const receipts = receiptsAll.filter((r) => r.storeId === id);
     const store = stores.find((s) => s.id === id);
+    const online = useSyncStore((s) => s.online);
+
+    const toast = useToastStore();                        // ← qo'shildi
 
     const [rows, setRows] = useState<Row[]>([{ key: "r1", qty: "", price: "", unit: "дона" }]);
     const [cash, setCash] = useState("");
     const [pickOpenFor, setPickOpenFor] = useState<string | null>(null);
     const [search, setSearch] = useState("");
-    const [saving, setSaving] = useState(false);
 
-    // Tarix collapsible
+    const [receipts, setReceipts] = useState<CashReceipt[]>([]);
     const [showHistory, setShowHistory] = useState(false);
-
-    // Cash edit modal
     const [editCashId, setEditCashId] = useState<string | null>(null);
     const [editCashAmount, setEditCashAmount] = useState("");
+
+    const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+
+    const loadReceipts = useCallback(async () => {
+        if (!id) return;
+        const { data, error } = await supabase
+            .from("cash_receipts")
+            .select("id,store_id,amount,note,created_at")
+            .eq("store_id", id)
+            .order("created_at", { ascending: false });
+        if (!error) setReceipts(data ?? []);
+    }, [id]);
+
+    const startPolling = useCallback(() => {
+        if (pollRef.current) return;
+        pollRef.current = setInterval(() => {
+            loadReceipts().catch(() => { });
+        }, 8000);
+    }, [loadReceipts]);
+
+    const stopPolling = useCallback(() => {
+        if (pollRef.current) {
+            clearInterval(pollRef.current);
+            pollRef.current = null;
+        }
+    }, []);
+
+    const subscribeRealtime = useCallback(() => {
+        if (!id) return;
+        if (channelRef.current) {
+            try {
+                supabase.removeChannel(channelRef.current);
+            } catch { }
+            channelRef.current = null;
+        }
+        const ch = supabase
+            .channel(`cash-receipts:${id}`)
+            .on(
+                "postgres_changes",
+                { event: "*", schema: "public", table: "cash_receipts", filter: `store_id=eq.${id}` },
+                () => loadReceipts().catch(() => { })
+            )
+            .subscribe();
+        channelRef.current = ch;
+    }, [id, loadReceipts]);
+
+    useFocusEffect(
+        React.useCallback(() => {
+            loadReceipts().catch(() => { });
+            subscribeRealtime();
+            if (online) startPolling();
+
+            return () => {
+                stopPolling();
+                if (channelRef.current) {
+                    try {
+                        supabase.removeChannel(channelRef.current);
+                    } catch { }
+                    channelRef.current = null;
+                }
+            };
+        }, [online, loadReceipts, subscribeRealtime, startPolling, stopPolling])
+    );
+
+    React.useEffect(() => {
+        if (online) startPolling();
+        else stopPolling();
+    }, [online, startPolling, stopPolling]);
 
     const filteredProducts = useMemo(() => {
         const q = search.trim().toLowerCase();
@@ -70,36 +150,55 @@ export default function Sales() {
         setSearch("");
     };
 
-    const addRow = () =>
-        setRows((r) => [...r, { key: `r${r.length + 1}`, qty: "", price: "", unit: "дона" }]);
-
-    const removeRow = (key: string) =>
-        setRows((r) => (r.length > 1 ? r.filter((x) => x.key !== key) : r));
+    const addRow = () => setRows((r) => [...r, { key: `r${r.length + 1}`, qty: "", price: "", unit: "дона" }]);
+    const removeRow = (key: string) => setRows((r) => (r.length > 1 ? r.filter((x) => x.key !== key) : r));
 
     const saveAll = async () => {
-        // bir paket ID
+        if (online) toast.showLoading("Saqlanmoqda…"); else toast.showLoading("Offline: navbatga yozildi");
         const batchId = "b-" + Date.now().toString(36);
+        try {
+            for (const r of rows) {
+                if (!r.product || !r.qty || !r.price) continue;
+                await addSale({
+                    storeId: id!,
+                    productName: r.product.name,
+                    qty: +r.qty,
+                    price: +r.price,
+                    unit: r.unit,
+                    batchId,
+                });
+            }
+            setRows([{ key: "r1", qty: "", price: "", unit: "дона" }]);
 
-        for (const r of rows) {
-            if (!r.product || !r.qty || !r.price) continue;
-            await addSale({
-                storeId: id!,
-                productName: r.product.name,
-                qty: +r.qty,
-                price: +r.price,
-                unit: r.unit,
-                batchId, // ⬅️ hammasiga bir xil ID
-            });
+            try { await useAppStore.getState().pushNow(); } catch { }
+            try { await useAppStore.getState().pullNow(); } catch { }
+        } finally {
+            // auto-hide bor; xohlasangiz qo'lda ham yopishingiz mumkin:
+            // toast.hide();
         }
-        setRows([{ key: "r1", qty: "", price: "", unit: "дона" }]);
     };
 
+    // ====== KASSA ======
     const saveCash = async () => {
         const amt = Number(cash || "0");
-        if (!amt) return;
-        await addCash(id!, amt);
-        setCash("");
-        setShowHistory(true); // qo‘shilgandan so‘ng tarixni ko‘rsatamiz
+        if (!amt || !id) return;
+
+        if (online) toast.showLoading("Saqlanmoqda…"); else toast.showLoading("Offline: navbatga yozildi");
+
+        if (online) {
+            const { error } = await supabase.from("cash_receipts").insert({ store_id: id, amount: amt });
+            if (!error) {
+                setCash("");
+                setShowHistory(true);
+                await loadReceipts();
+            } else {
+                await addCashOffline(id, amt);
+            }
+        } else {
+            await addCashOffline(id, amt);
+            setCash("");
+            setShowHistory(true);
+        }
     };
 
     const openEditCash = (cid: string, amount: number) => {
@@ -109,13 +208,32 @@ export default function Sales() {
 
     const submitEditCash = async () => {
         if (!editCashId) return;
+        if (online) toast.showLoading("Saqlanmoqda…"); else toast.showLoading("Offline: navbatga yozildi");
+
         const amt = Number(editCashAmount || "0");
-        await updateCash(editCashId, amt);
+        if (online) {
+            const { error } = await supabase.from("cash_receipts").update({ amount: amt }).eq("id", editCashId);
+            if (!error) {
+                setEditCashId(null);
+                await loadReceipts();
+                return;
+            }
+        }
+        await updateCashOffline(editCashId, amt);
         setEditCashId(null);
     };
 
     const deleteCashItem = async (cid: string) => {
-        await removeCash(cid);
+        if (online) toast.showLoading("Saqlanmoqda…"); else toast.showLoading("Offline: navbatga yozildi");
+
+        if (online) {
+            const { error } = await supabase.from("cash_receipts").delete().eq("id", cid);
+            if (!error) {
+                await loadReceipts();
+                return;
+            }
+        }
+        await removeCashOffline(cid);
     };
 
     return (
@@ -131,7 +249,6 @@ export default function Sales() {
             >
                 <Text style={{ fontSize: 20, fontWeight: "800" }}>Сотиш</Text>
 
-                {/* Qatorlar ro'yxati */}
                 {rows.map((r) => (
                     <View
                         key={r.key}
@@ -161,23 +278,18 @@ export default function Sales() {
                             <TextInput
                                 placeholder="Миқдор"
                                 value={r.qty}
-                                onChangeText={(v) =>
-                                    setRows((rs) => rs.map((x) => (x.key === r.key ? { ...x, qty: v } : x)))
-                                }
+                                onChangeText={(v) => setRows((rs) => rs.map((x) => (x.key === r.key ? { ...x, qty: v } : x)))}
                                 keyboardType="numeric"
                                 style={{ flex: 1, borderWidth: 1, borderRadius: 10, padding: 12 }}
                             />
                             <TextInput
                                 placeholder="Нарх"
                                 value={r.price}
-                                onChangeText={(v) =>
-                                    setRows((rs) => rs.map((x) => (x.key === r.key ? { ...x, price: v } : x)))
-                                }
+                                onChangeText={(v) => setRows((rs) => rs.map((x) => (x.key === r.key ? { ...x, price: v } : x)))}
                                 keyboardType="numeric"
                                 style={{ flex: 1, borderWidth: 1, borderRadius: 10, padding: 12 }}
                             />
 
-                            {/* minus – dumaloq tugma */}
                             <TouchableOpacity
                                 onPress={() => removeRow(r.key)}
                                 style={{
@@ -201,14 +313,13 @@ export default function Sales() {
                     </View>
                 ))}
 
-                {/* Yangi qator qo'shish */}
                 <TouchableOpacity
                     onPress={addRow}
                     style={{
                         alignSelf: "flex-start",
                         paddingVertical: 10,
                         paddingHorizontal: 14,
-                        backgroundColor: "#780E14",        // 🔴 qizil fon (asosiy rang)
+                        backgroundColor: "#780E14",
                         borderRadius: 12,
                         marginTop: 12,
                         borderWidth: 0,
@@ -222,22 +333,15 @@ export default function Sales() {
                     <Text style={{ fontWeight: "800", color: "#fff" }}>Қатор қўшиш</Text>
                 </TouchableOpacity>
 
-
                 <Text style={{ fontWeight: "800", marginTop: 12 }}>
                     Умумий сумма: {total.toLocaleString()} so‘m
                 </Text>
 
                 <TouchableOpacity
                     onPress={saveAll}
-                    style={{
-                        backgroundColor: "#770E13",
-                        padding: 14,
-                        borderRadius: 12,
-                        marginTop: 8,
-                    }}
+                    style={{ backgroundColor: "#770E13", padding: 14, borderRadius: 12, marginTop: 8 }}
                 >
                     <Text style={{ color: "#fff", textAlign: "center", fontWeight: "800" }}>Сақлаш</Text>
-                    {/* saqlanmoqda overlay emas, lekin button ichida indikator ko'rsatish ham mumkin */}
                 </TouchableOpacity>
 
                 {/* Olingan pul */}
@@ -273,137 +377,86 @@ export default function Sales() {
                         </TouchableOpacity>
                     </View>
 
-                    {/* Tarix header (collapsible toggle) */}
+                    {/* Tarix */}
                     <TouchableOpacity
                         onPress={() => setShowHistory((v) => !v)}
-                        style={{
-                            marginTop: 12,
-                            flexDirection: "row",
-                            alignItems: "center",
-                            justifyContent: "space-between",
-                        }}
+                        style={{ marginTop: 12, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}
                     >
                         <Text style={{ fontWeight: "700" }}>Тарих</Text>
                         <Ionicons name={showHistory ? "chevron-up" : "chevron-down"} size={18} color="#333" />
                     </TouchableOpacity>
 
-                    {/* Tarix ro‘yxati */}
                     {showHistory && (
                         <View style={{ marginTop: 6 }}>
                             {receipts.length === 0 ? (
                                 <Text style={{ color: "#777" }}>Ҳали тушум йўқ</Text>
                             ) : (
-                                receipts
-                                    .slice()
-                                    .reverse()
-                                    .map((r) => (
-                                        <View
-                                            key={r.id}
-                                            style={{
-                                                flexDirection: "row",
-                                                alignItems: "center",
-                                                justifyContent: "space-between",
-                                                paddingVertical: 8,
-                                                borderTopWidth: 1,
-                                                borderTopColor: "#F0F0F0",
-                                            }}
-                                        >
-                                            {/* chap: summa + sana */}
-                                            <View style={{ flex: 1, paddingRight: 10 }}>
-                                                <Text style={{ fontWeight: "800" }}>{r.amount.toLocaleString()} so‘m</Text>
-                                                <Text style={{ color: "#777", fontSize: 12, marginTop: 2 }}>
-                                                    {new Date(r.created_at).toLocaleString()}
-                                                </Text>
-                                            </View>
-
-                                            {/* o‘ng: edit / delete */}
-                                            <View style={{ flexDirection: "row", gap: 8 }}>
-                                                <TouchableOpacity
-                                                    onPress={() => openEditCash(r.id, r.amount)}
-                                                    style={{
-                                                        width: 36,
-                                                        height: 36,
-                                                        borderRadius: 18,
-                                                        backgroundColor: "#fff",
-                                                        borderWidth: 1,
-                                                        borderColor: "#E9ECF1",
-                                                        alignItems: "center",
-                                                        justifyContent: "center",
-                                                    }}
-                                                >
-                                                    <Ionicons name="create-outline" size={18} color="#770E13" />
-                                                </TouchableOpacity>
-                                                <TouchableOpacity
-                                                    onPress={() => deleteCashItem(r.id)}
-                                                    style={{
-                                                        width: 36,
-                                                        height: 36,
-                                                        borderRadius: 18,
-                                                        backgroundColor: "#FCE9EA",
-                                                        borderWidth: 1,
-                                                        borderColor: "#F4C7CB",
-                                                        alignItems: "center",
-                                                        justifyContent: "center",
-                                                    }}
-                                                >
-                                                    <Ionicons name="close-outline" size={18} color="#E23D3D" />
-                                                </TouchableOpacity>
-                                            </View>
+                                receipts.map((r) => (
+                                    <View
+                                        key={r.id}
+                                        style={{
+                                            flexDirection: "row",
+                                            alignItems: "center",
+                                            justifyContent: "space-between",
+                                            paddingVertical: 8,
+                                            borderTopWidth: 1,
+                                            borderTopColor: "#F0F0F0",
+                                        }}
+                                    >
+                                        <View style={{ flex: 1, paddingRight: 10 }}>
+                                            <Text style={{ fontWeight: "800" }}>{Number(r.amount).toLocaleString()} so‘m</Text>
+                                            <Text style={{ color: "#777", fontSize: 12, marginTop: 2 }}>
+                                                {new Date(r.created_at).toLocaleString()}
+                                            </Text>
                                         </View>
-                                    ))
+
+                                        <View style={{ flexDirection: "row", gap: 8 }}>
+                                            <TouchableOpacity
+                                                onPress={() => openEditCash(r.id, Number(r.amount))}
+                                                style={{
+                                                    width: 36,
+                                                    height: 36,
+                                                    borderRadius: 18,
+                                                    backgroundColor: "#fff",
+                                                    borderWidth: 1,
+                                                    borderColor: "#E9ECF1",
+                                                    alignItems: "center",
+                                                    justifyContent: "center",
+                                                }}
+                                            >
+                                                <Ionicons name="create-outline" size={18} color="#770E13" />
+                                            </TouchableOpacity>
+                                            <TouchableOpacity
+                                                onPress={() => deleteCashItem(r.id)}
+                                                style={{
+                                                    width: 36,
+                                                    height: 36,
+                                                    borderRadius: 18,
+                                                    backgroundColor: "#FCE9EA",
+                                                    borderWidth: 1,
+                                                    borderColor: "#F4C7CB",
+                                                    alignItems: "center",
+                                                    justifyContent: "center",
+                                                }}
+                                            >
+                                                <Ionicons name="close-outline" size={18} color="#E23D3D" />
+                                            </TouchableOpacity>
+                                        </View>
+                                    </View>
+                                ))
                             )}
                         </View>
                     )}
                 </View>
             </ScrollView>
 
-            {/* Saqlanmoqda overlay */}
-            {saving && (
-                <View
-                    pointerEvents="none"
-                    style={{
-                        position: "absolute",
-                        left: 0,
-                        right: 0,
-                        bottom: 0,
-                        top: 0,
-                        backgroundColor: "rgba(0,0,0,0.15)",
-                        alignItems: "center",
-                        justifyContent: "center",
-                    }}
-                >
-                    <View
-                        style={{
-                            backgroundColor: "#fff",
-                            paddingHorizontal: 18,
-                            paddingVertical: 14,
-                            borderRadius: 12,
-                            borderWidth: 1,
-                            borderColor: "#eee",
-                            flexDirection: "row",
-                            alignItems: "center",
-                            gap: 10,
-                        }}
-                    >
-                        <ActivityIndicator />
-                        <Text style={{ fontWeight: "800" }}>Сақланяпти…</Text>
-                    </View>
-                </View>
-            )}
-
-            {/* Product picker modal */}
-            <Modal
-                visible={!!pickOpenFor}
-                transparent
-                animationType="fade"
-                onRequestClose={() => setPickOpenFor(null)}
-            >
+            {/* eski “saving” overlay olib tashlandi */}
+            <Modal visible={!!pickOpenFor} transparent animationType="fade" onRequestClose={() => setPickOpenFor(null)}>
                 <Pressable
                     onPress={() => setPickOpenFor(null)}
                     style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.2)", justifyContent: "center", padding: 24 }}
                 >
                     <View style={{ backgroundColor: "#fff", borderRadius: 12, maxHeight: "70%", overflow: "hidden" }}>
-                        {/* Qidiruv */}
                         <View style={{ padding: 12, borderBottomWidth: 1, borderColor: "#eee" }}>
                             <TextInput
                                 placeholder="Қидирув..."
@@ -412,7 +465,6 @@ export default function Sales() {
                                 style={{ borderWidth: 1, borderRadius: 10, padding: 10 }}
                             />
                         </View>
-
                         <FlatList
                             data={filteredProducts}
                             keyExtractor={(p) => p.id}
@@ -430,13 +482,7 @@ export default function Sales() {
                 </Pressable>
             </Modal>
 
-            {/* Cash edit modal */}
-            <Modal
-                visible={!!editCashId}
-                transparent
-                animationType="fade"
-                onRequestClose={() => setEditCashId(null)}
-            >
+            <Modal visible={!!editCashId} transparent animationType="fade" onRequestClose={() => setEditCashId(null)}>
                 <Pressable
                     onPress={() => setEditCashId(null)}
                     style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.2)", justifyContent: "center", padding: 24 }}
@@ -479,6 +525,8 @@ export default function Sales() {
                     </View>
                 </Pressable>
             </Modal>
+
+            <Toast /> {/* ← markaziy toast */}
         </KeyboardAvoidingView>
     );
 }

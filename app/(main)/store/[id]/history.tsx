@@ -1,7 +1,9 @@
 // app/(main)/store/[id]/history.tsx
+import Toast from "@/components/Toast"; // ← qo'shildi
 import { Button, C, Card, H1, H2, Select } from "@/components/UI";
 import { useAppStore } from "@/store/appStore";
 import { useSyncStore } from "@/store/syncStore";
+import { useToastStore } from "@/store/toastStore"; // ← qo'shildi
 import { Ionicons } from "@expo/vector-icons";
 import React, { useMemo, useState } from "react";
 import { FlatList, Modal, Pressable, Text, TextInput, TouchableOpacity, View } from "react-native";
@@ -65,6 +67,8 @@ export default function History() {
     const pushNow = useAppStore((s) => s.pushNow);
     const pullNow = useAppStore((s) => s.pullNow);
 
+    const toast = useToastStore();                       // ←
+
     const [tab, setTab] = useState<Tab>("sales");
     const monthOpts = useMemo(() => monthOptions(18), []);
     const [month, setMonth] = useState(monthOpts[0]?.value);
@@ -77,7 +81,7 @@ export default function History() {
         [stores, storeType]
     );
     const storeOptions = useMemo(
-        () => [{ label: "Барчаси", value: "all" }, ...filteredStores.map((s) => ({ label: s.name, value: s.id }))],
+        () => [{ label: "Барчасi", value: "all" }, ...filteredStores.map((s) => ({ label: s.name, value: s.id }))],
         [filteredStores]
     );
     const [storeId, setStoreId] = useState<string>("all");
@@ -123,6 +127,7 @@ export default function History() {
     };
 
     const saveGroup = async () => {
+        if (online) toast.showLoading("Saqlanmoqda…"); else toast.showLoading("Offline: navbatga yozildi");
         for (const r of editRows) {
             const qty = Number(r.qty || "0");
             const price = Number(r.price || "0");
@@ -138,6 +143,7 @@ export default function History() {
     };
 
     const removeRowFromGroup = async (rowId: string) => {
+        if (online) toast.showLoading("Saqlanmoqda…"); else toast.showLoading("Offline: navbatga yozildi");
         if (editType === "sales") await removeSale(rowId);
         else if (editType === "returns") await removeReturn(rowId);
         setEditRows((rows) => rows.filter((r) => r.id !== rowId));
@@ -148,6 +154,7 @@ export default function History() {
     };
 
     const removeWholeGroup = async (type: Tab, key: string) => {
+        if (online) toast.showLoading("Saqlanmoqda…"); else toast.showLoading("Offline: navbatga yozildi");
         const g = type === "sales" ? saleGroups.find((x) => x.key === key) : returnGroups.find((x) => x.key === key);
         if (!g) return;
         for (const row of g.items) {
@@ -218,168 +225,167 @@ export default function History() {
     };
 
     return (
-        <View style={{ flex: 1, padding: 16 }}>
-            <H1>Тарих</H1>
+        <>
+            <View style={{ flex: 1, padding: 16 }}>
+                <H1>Тарих</H1>
 
-            {/* Tablar */}
-            <View style={{ flexDirection: "row", gap: 8, marginTop: 10 }}>
-                <TouchableOpacity onPress={() => setTab("sales")} style={{ flex: 1 }}>
-                    <View
-                        style={{
-                            paddingVertical: 10,
-                            borderRadius: 12,
-                            borderWidth: 1,
-                            borderColor: tab === "sales" ? C.primary : C.border,
-                            backgroundColor: tab === "sales" ? C.primarySoft : C.white,
-                            alignItems: "center",
-                        }}
-                    >
-                        <Text style={{ fontWeight: "800", color: tab === "sales" ? C.primary : C.text }}>Сотув тарихи</Text>
-                    </View>
-                </TouchableOpacity>
-                <TouchableOpacity onPress={() => setTab("returns")} style={{ flex: 1 }}>
-                    <View
-                        style={{
-                            paddingVertical: 10,
-                            borderRadius: 12,
-                            borderWidth: 1,
-                            borderColor: tab === "returns" ? C.primary : C.border,
-                            backgroundColor: tab === "returns" ? C.primarySoft : C.white,
-                            alignItems: "center",
-                        }}
-                    >
-                        <Text style={{ fontWeight: "800", color: tab === "returns" ? C.primary : C.text }}>Қайтариш тарихи</Text>
-                    </View>
-                </TouchableOpacity>
-            </View>
-
-            {/* Filtrlar */}
-            <View style={{ marginTop: 12 }}>
-                <H2>Ой бўйича фильтр</H2>
-                <Select value={month} onChange={setMonth} options={monthOpts} style={{ marginTop: 6 }} />
-            </View>
-
-            {/* 50/50 qatorda Turi + Filial/Do‘kon */}
-            <View style={{ marginTop: 12, flexDirection: "row", gap: 8 }}>
-                <View style={{ flex: 1 }}>
-                    <H2>Тури</H2>
-                    <Select
-                        value={storeType}
-                        onChange={(v: string) => {
-                            setStoreType(v as StoreTypeFilter);
-                            setStoreId("all");
-                        }}
-                        options={[
-                            { label: "Барчаси", value: "all" },
-                            { label: "Филиаллар", value: "branch" },
-                            { label: "Дўконлар", value: "market" },
-                        ]}
-                        style={{ marginTop: 6 }}
-                    />
+                <View style={{ flexDirection: "row", gap: 8, marginTop: 10 }}>
+                    <TouchableOpacity onPress={() => setTab("sales")} style={{ flex: 1 }}>
+                        <View
+                            style={{
+                                paddingVertical: 10,
+                                borderRadius: 12,
+                                borderWidth: 1,
+                                borderColor: tab === "sales" ? C.primary : C.border,
+                                backgroundColor: tab === "sales" ? C.primarySoft : C.white,
+                                alignItems: "center",
+                            }}
+                        >
+                            <Text style={{ fontWeight: "800", color: tab === "sales" ? C.primary : C.text }}>Сотув тарихи</Text>
+                        </View>
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => setTab("returns")} style={{ flex: 1 }}>
+                        <View
+                            style={{
+                                paddingVertical: 10,
+                                borderRadius: 12,
+                                borderWidth: 1,
+                                borderColor: tab === "returns" ? C.primary : C.border,
+                                backgroundColor: tab === "returns" ? C.primarySoft : C.white,
+                                alignItems: "center",
+                            }}
+                        >
+                            <Text style={{ fontWeight: "800", color: tab === "returns" ? C.primary : C.text }}>Қайтариш тарихи</Text>
+                        </View>
+                    </TouchableOpacity>
                 </View>
-                <View style={{ flex: 1 }}>
-                    <H2>Филиал/Дўкон</H2>
-                    <Select value={storeId} onChange={setStoreId} options={storeOptions} style={{ marginTop: 6 }} />
-                </View>
-            </View>
 
-            {/* Ro'yxatlar */}
-            {tab === "sales" ? (
-                saleGroups.length === 0 ? (
+                <View style={{ marginTop: 12 }}>
+                    <H2>Ой бўйича фильтр</H2>
+                    <Select value={month} onChange={setMonth} options={monthOpts} style={{ marginTop: 6 }} />
+                </View>
+
+                <View style={{ marginTop: 12, flexDirection: "row", gap: 8 }}>
+                    <View style={{ flex: 1 }}>
+                        <H2>Тури</H2>
+                        <Select
+                            value={storeType}
+                            onChange={(v: string) => {
+                                setStoreType(v as any);
+                                setStoreId("all");
+                            }}
+                            options={[
+                                { label: "Барчаси", value: "all" },
+                                { label: "Филиаллар", value: "branch" },
+                                { label: "Дўконлар", value: "market" },
+                            ]}
+                            style={{ marginTop: 6 }}
+                        />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                        <H2>Филиал/Дўкон</H2>
+                        <Select value={storeId} onChange={setStoreId} options={storeOptions} style={{ marginTop: 6 }} />
+                    </View>
+                </View>
+
+                {tab === "sales" ? (
+                    saleGroups.length === 0 ? (
+                        <Text style={{ color: C.muted, marginTop: 10 }}>Ҳали маълумот йўқ</Text>
+                    ) : (
+                        <FlatList
+                            style={{ marginTop: 8 }}
+                            data={saleGroups}
+                            keyExtractor={(g) => g.key}
+                            renderItem={({ item }) => <GroupCard g={item} type="sales" />}
+                            ItemSeparatorComponent={() => <View style={{ height: 4 }} />}
+                            contentContainerStyle={{ paddingBottom: 24 }}
+                        />
+                    )
+                ) : returnGroups.length === 0 ? (
                     <Text style={{ color: C.muted, marginTop: 10 }}>Ҳали маълумот йўқ</Text>
                 ) : (
                     <FlatList
                         style={{ marginTop: 8 }}
-                        data={saleGroups}
+                        data={returnGroups}
                         keyExtractor={(g) => g.key}
-                        renderItem={({ item }) => <GroupCard g={item} type="sales" />}
+                        renderItem={({ item }) => <GroupCard g={item} type="returns" />}
                         ItemSeparatorComponent={() => <View style={{ height: 4 }} />}
                         contentContainerStyle={{ paddingBottom: 24 }}
                     />
-                )
-            ) : returnGroups.length === 0 ? (
-                <Text style={{ color: C.muted, marginTop: 10 }}>Ҳали маълумот йўқ</Text>
-            ) : (
-                <FlatList
-                    style={{ marginTop: 8 }}
-                    data={returnGroups}
-                    keyExtractor={(g) => g.key}
-                    renderItem={({ item }) => <GroupCard g={item} type="returns" />}
-                    ItemSeparatorComponent={() => <View style={{ height: 4 }} />}
-                    contentContainerStyle={{ paddingBottom: 24 }}
-                />
-            )}
+                )}
 
-            {/* Paket edit modali */}
-            <Modal
-                visible={!!openKey}
-                transparent
-                animationType="fade"
-                onRequestClose={() => {
-                    setOpenKey(null);
-                    setEditType(null);
-                }}
-            >
-                <Pressable
-                    onPress={() => {
+                <Modal
+                    visible={!!openKey}
+                    transparent
+                    animationType="fade"
+                    onRequestClose={() => {
                         setOpenKey(null);
                         setEditType(null);
                     }}
-                    style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.2)", justifyContent: "center", padding: 24 }}
                 >
-                    <Card style={{ padding: 14, maxHeight: "80%" }}>
-                        <H2>{editType === "sales" ? "Сотувни" : "Қайтаришни"} пакет билан таҳрирлаш</H2>
+                    <Pressable
+                        onPress={() => {
+                            setOpenKey(null);
+                            setEditType(null);
+                        }}
+                        style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.2)", justifyContent: "center", padding: 24 }}
+                    >
+                        <Card style={{ padding: 14, maxHeight: "80%" }}>
+                            <H2>{editType === "sales" ? "Сотувни" : "Қайтаришни"} пакет билан таҳрирлаш</H2>
 
-                        <FlatList
-                            style={{ marginTop: 10 }}
-                            data={editRows}
-                            keyExtractor={(r) => r.id}
-                            ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
-                            renderItem={({ item }) => (
-                                <View style={{ borderWidth: 1, borderColor: "#EEE", borderRadius: 10, padding: 10 }}>
-                                    <Text style={{ fontWeight: "800" }}>{item.name}</Text>
+                            <FlatList
+                                style={{ marginTop: 10 }}
+                                data={editRows}
+                                keyExtractor={(r) => r.id}
+                                ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
+                                renderItem={({ item }) => (
+                                    <View style={{ borderWidth: 1, borderColor: "#EEE", borderRadius: 10, padding: 10 }}>
+                                        <Text style={{ fontWeight: "800" }}>{item.name}</Text>
 
-                                    <View style={{ flexDirection: "row", gap: 8, marginTop: 6 }}>
-                                        <TextInput
-                                            value={item.qty}
-                                            onChangeText={(v) =>
-                                                setEditRows((rows) => rows.map((r) => (r.id === item.id ? { ...r, qty: v } : r)))
-                                            }
-                                            keyboardType="numeric"
-                                            placeholder="Миқдор"
-                                            style={{ flex: 1, borderWidth: 1, borderColor: C.border, borderRadius: 8, padding: 10 }}
-                                        />
-                                        <TextInput
-                                            value={item.price}
-                                            onChangeText={(v) =>
-                                                setEditRows((rows) => rows.map((r) => (r.id === item.id ? { ...r, price: v } : r)))
-                                            }
-                                            keyboardType="numeric"
-                                            placeholder="Нарх"
-                                            style={{ flex: 1, borderWidth: 1, borderColor: C.border, borderRadius: 8, padding: 10 }}
-                                        />
-                                        <TouchableOpacity
-                                            onPress={() => removeRowFromGroup(item.id)}
-                                            style={{
-                                                width: 36, height: 36, borderRadius: 18,
-                                                backgroundColor: "#FCE9EA", borderWidth: 1, borderColor: "#F4C7CB",
-                                                alignItems: "center", justifyContent: "center", alignSelf: "center",
-                                            }}
-                                        >
-                                            <Ionicons name="close-outline" size={18} color="#E23D3D" />
-                                        </TouchableOpacity>
+                                        <View style={{ flexDirection: "row", gap: 8, marginTop: 6 }}>
+                                            <TextInput
+                                                value={item.qty}
+                                                onChangeText={(v) =>
+                                                    setEditRows((rows) => rows.map((r) => (r.id === item.id ? { ...r, qty: v } : r)))
+                                                }
+                                                keyboardType="numeric"
+                                                placeholder="Миқдор"
+                                                style={{ flex: 1, borderWidth: 1, borderColor: C.border, borderRadius: 8, padding: 10 }}
+                                            />
+                                            <TextInput
+                                                value={item.price}
+                                                onChangeText={(v) =>
+                                                    setEditRows((rows) => rows.map((r) => (r.id === item.id ? { ...r, price: v } : r)))
+                                                }
+                                                keyboardType="numeric"
+                                                placeholder="Нарх"
+                                                style={{ flex: 1, borderWidth: 1, borderColor: C.border, borderRadius: 8, padding: 10 }}
+                                            />
+                                            <TouchableOpacity
+                                                onPress={() => removeRowFromGroup(item.id)}
+                                                style={{
+                                                    width: 36, height: 36, borderRadius: 18,
+                                                    backgroundColor: "#FCE9EA", borderWidth: 1, borderColor: "#F4C7CB",
+                                                    alignItems: "center", justifyContent: "center", alignSelf: "center",
+                                                }}
+                                            >
+                                                <Ionicons name="close-outline" size={18} color="#E23D3D" />
+                                            </TouchableOpacity>
+                                        </View>
                                     </View>
-                                </View>
-                            )}
-                        />
+                                )}
+                            />
 
-                        <View style={{ flexDirection: "row", gap: 10, marginTop: 12, justifyContent: "flex-end" }}>
-                            <Button title="Бекор" tone="neutral" onPress={() => { setOpenKey(null); setEditType(null); }} style={{ minWidth: 120 }} />
-                            <Button title="Сақлаш" onPress={saveGroup} style={{ minWidth: 120 }} />
-                        </View>
-                    </Card>
-                </Pressable>
-            </Modal>
-        </View>
+                            <View style={{ flexDirection: "row", gap: 10, marginTop: 12, justifyContent: "flex-end" }}>
+                                <Button title="Бекор" tone="neutral" onPress={() => { setOpenKey(null); setEditType(null); }} style={{ minWidth: 120 }} />
+                                <Button title="Сақлаш" onPress={saveGroup} style={{ minWidth: 120 }} />
+                            </View>
+                        </Card>
+                    </Pressable>
+                </Modal>
+            </View>
+
+            <Toast /> {/* ← markaziy toast */}
+        </>
     );
 }
