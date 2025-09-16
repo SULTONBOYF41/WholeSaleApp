@@ -1,9 +1,8 @@
-// app/(main)/store/[id]/return.tsx
-import Toast from "@/components/Toast"; // ← qo'shildi
+import Toast from "@/components/Toast";
 import { supabase } from "@/lib/supabase";
 import { useAppStore } from "@/store/appStore";
 import { useSyncStore } from "@/store/syncStore";
-import { useToastStore } from "@/store/toastStore"; // ← qo'shildi
+import { useToastStore } from "@/store/toastStore";
 import type { Product, Unit } from "@/types";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect, useLocalSearchParams } from "expo-router";
@@ -29,7 +28,7 @@ export default function Returns() {
     const products = useAppStore((s) => s.products);
     const stores = useAppStore((s) => s.stores);
     const online = useSyncStore((s) => s.online);
-    const toast = useToastStore();                       // ←
+    const toast = useToastStore();
 
     const store = stores.find((s) => s.id === id);
 
@@ -56,18 +55,16 @@ export default function Returns() {
 
     const subscribeRealtime = useCallback(() => {
         if (channelRef.current) {
-            try { supabase.removeChannel(channelRef.current); } catch { }
+            try {
+                supabase.removeChannel(channelRef.current);
+            } catch { }
             channelRef.current = null;
         }
         const ch = supabase
             .channel("returns-live")
-            .on(
-                "postgres_changes",
-                { event: "*", schema: "public", table: "returns" },
-                () => {
-                    useAppStore.getState().pullNow().catch(() => { });
-                }
-            )
+            .on("postgres_changes", { event: "*", schema: "public", table: "returns" }, () => {
+                useAppStore.getState().pullNow().catch(() => { });
+            })
             .subscribe();
         channelRef.current = ch;
     }, []);
@@ -81,7 +78,9 @@ export default function Returns() {
             return () => {
                 stopPolling();
                 if (channelRef.current) {
-                    try { supabase.removeChannel(channelRef.current); } catch { }
+                    try {
+                        supabase.removeChannel(channelRef.current);
+                    } catch { }
                     channelRef.current = null;
                 }
             };
@@ -89,19 +88,17 @@ export default function Returns() {
     );
 
     React.useEffect(() => {
-        if (online) startPolling(); else stopPolling();
+        if (online) startPolling();
+        else stopPolling();
     }, [online, startPolling, stopPolling]);
 
     const filteredProducts = useMemo(() => {
         const q = search.trim().toLowerCase();
         if (!q) return products;
-        return products.filter((p) => p.name.toLowerCase().includes(q));
+        return products.filter((p) => (p.name || "").toLowerCase().includes(q));
     }, [products, search]);
 
-    const total = useMemo(
-        () => rows.reduce((a, r) => a + (Number(r.qty) || 0) * (Number(r.price) || 0), 0),
-        [rows]
-    );
+    const total = useMemo(() => rows.reduce((a, r) => a + (Number(r.qty) || 0) * (Number(r.price) || 0), 0), [rows]);
 
     const openPicker = (key: string) => setPickOpenFor(key);
     const selectProduct = (p: Product) => {
@@ -116,14 +113,13 @@ export default function Returns() {
         setSearch("");
     };
 
-    const addRow = () =>
-        setRows((r) => [...r, { key: `r${r.length + 1}`, qty: "", price: "", unit: "дона" }]);
+    const addRow = () => setRows((r) => [...r, { key: `r${r.length + 1}`, qty: "", price: "", unit: "дона" }]);
 
-    const removeRow = (key: string) =>
-        setRows((r) => (r.length > 1 ? r.filter((x) => x.key !== key) : r));
+    const removeRow = (key: string) => setRows((r) => (r.length > 1 ? r.filter((x) => x.key !== key) : r));
 
     const saveAll = async () => {
-        if (online) toast.showLoading("Saqlanmoqda…"); else toast.showLoading("Offline: navbatga yozildi");
+        if (online) toast.showLoading("Saqlanmoqda…");
+        else toast.showLoading("Offline: navbatga yozildi");
         for (const r of rows) {
             if (!r.product || !r.qty || !r.price) continue;
             await addReturn({
@@ -136,8 +132,12 @@ export default function Returns() {
         }
         setRows([{ key: "r1", qty: "", price: "", unit: "дона" }]);
 
-        try { await useAppStore.getState().pushNow(); } catch { }
-        try { await useAppStore.getState().pullNow(); } catch { }
+        try {
+            await useAppStore.getState().pushNow();
+        } catch { }
+        try {
+            await useAppStore.getState().pullNow();
+        } catch { }
     };
 
     return (
@@ -182,18 +182,14 @@ export default function Returns() {
                             <TextInput
                                 placeholder="Миқдор"
                                 value={r.qty}
-                                onChangeText={(v) =>
-                                    setRows((rs) => rs.map((x) => (x.key === r.key ? { ...x, qty: v } : x)))
-                                }
+                                onChangeText={(v) => setRows((rs) => rs.map((x) => (x.key === r.key ? { ...x, qty: v } : x)))}
                                 keyboardType="numeric"
                                 style={{ flex: 1, borderWidth: 1, borderRadius: 10, padding: 12 }}
                             />
                             <TextInput
                                 placeholder="Нарх"
                                 value={r.price}
-                                onChangeText={(v) =>
-                                    setRows((rs) => rs.map((x) => (x.key === r.key ? { ...x, price: v } : x)))
-                                }
+                                onChangeText={(v) => setRows((rs) => rs.map((x) => (x.key === r.key ? { ...x, price: v } : x)))}
                                 keyboardType="numeric"
                                 style={{ flex: 1, borderWidth: 1, borderRadius: 10, padding: 12 }}
                             />
@@ -211,7 +207,7 @@ export default function Returns() {
                                     justifyContent: "center",
                                 }}
                             >
-                                <Ionicons name="remove" size={18} color="#770E13" />
+                                <Ionicons name="remove-circle-outline" size={18} color="#770E13" />
                             </TouchableOpacity>
                         </View>
 
@@ -241,14 +237,9 @@ export default function Returns() {
                     <Text style={{ fontWeight: "800", color: "#fff" }}>Қатор қўшиш</Text>
                 </TouchableOpacity>
 
-                <Text style={{ fontWeight: "800", marginTop: 12 }}>
-                    Умумий сумма: {total.toLocaleString()} so‘m
-                </Text>
+                <Text style={{ fontWeight: "800", marginTop: 12 }}>Умумий сумма: {total.toLocaleString()} so‘m</Text>
 
-                <TouchableOpacity
-                    onPress={saveAll}
-                    style={{ backgroundColor: "#770E13", padding: 14, borderRadius: 12, marginTop: 8 }}
-                >
+                <TouchableOpacity onPress={saveAll} style={{ backgroundColor: "#770E13", padding: 14, borderRadius: 12, marginTop: 8 }}>
                     <Text style={{ color: "#fff", textAlign: "center", fontWeight: "800" }}>Сақлаш</Text>
                 </TouchableOpacity>
             </ScrollView>
@@ -260,12 +251,7 @@ export default function Returns() {
                 >
                     <View style={{ backgroundColor: "#fff", borderRadius: 12, maxHeight: "70%", overflow: "hidden" }}>
                         <View style={{ padding: 12, borderBottomWidth: 1, borderColor: "#eee" }}>
-                            <TextInput
-                                placeholder="Қидирув..."
-                                value={search}
-                                onChangeText={setSearch}
-                                style={{ borderWidth: 1, borderRadius: 10, padding: 10 }}
-                            />
+                            <TextInput placeholder="Қидирув..." value={search} onChangeText={setSearch} style={{ borderWidth: 1, borderRadius: 10, padding: 10 }} />
                         </View>
 
                         <FlatList
@@ -285,7 +271,7 @@ export default function Returns() {
                 </Pressable>
             </Modal>
 
-            <Toast /> {/* ← markaziy toast */}
+            <Toast />
         </KeyboardAvoidingView>
     );
 }

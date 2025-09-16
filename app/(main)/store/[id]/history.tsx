@@ -1,9 +1,8 @@
-// app/(main)/store/[id]/history.tsx
-import Toast from "@/components/Toast"; // ← qo'shildi
+import Toast from "@/components/Toast";
 import { Button, C, Card, H1, H2, Select } from "@/components/UI";
 import { useAppStore } from "@/store/appStore";
 import { useSyncStore } from "@/store/syncStore";
-import { useToastStore } from "@/store/toastStore"; // ← qo'shildi
+import { useToastStore } from "@/store/toastStore";
 import { Ionicons } from "@expo/vector-icons";
 import React, { useMemo, useState } from "react";
 import { FlatList, Modal, Pressable, Text, TextInput, TouchableOpacity, View } from "react-native";
@@ -67,7 +66,7 @@ export default function History() {
     const pushNow = useAppStore((s) => s.pushNow);
     const pullNow = useAppStore((s) => s.pullNow);
 
-    const toast = useToastStore();                       // ←
+    const toast = useToastStore();
 
     const [tab, setTab] = useState<Tab>("sales");
     const monthOpts = useMemo(() => monthOptions(18), []);
@@ -76,14 +75,8 @@ export default function History() {
     type StoreTypeFilter = "all" | "branch" | "market";
     const [storeType, setStoreType] = useState<StoreTypeFilter>("all");
 
-    const filteredStores = useMemo(
-        () => stores.filter((s) => (storeType === "all" ? true : s.type === storeType)),
-        [stores, storeType]
-    );
-    const storeOptions = useMemo(
-        () => [{ label: "Барчасi", value: "all" }, ...filteredStores.map((s) => ({ label: s.name, value: s.id }))],
-        [filteredStores]
-    );
+    const filteredStores = useMemo(() => stores.filter((s) => (storeType === "all" ? true : s.type === storeType)), [stores, storeType]);
+    const storeOptions = useMemo(() => [{ label: "Барчасi", value: "all" }, ...filteredStores.map((s) => ({ label: s.name, value: s.id }))], [filteredStores]);
     const [storeId, setStoreId] = useState<string>("all");
 
     const salesFiltered = useMemo(() => {
@@ -121,13 +114,13 @@ export default function History() {
         setEditType(type);
         setOpenKey(key);
         const g = type === "sales" ? saleGroups.find((x) => x.key === key) : returnGroups.find((x) => x.key === key);
-        const rows: EditRow[] =
-            g?.items.map((x) => ({ id: x.id, name: x.productName, qty: String(x.qty), price: String(x.price) })) ?? [];
+        const rows: EditRow[] = g?.items.map((x) => ({ id: x.id, name: x.productName, qty: String(x.qty), price: String(x.price) })) ?? [];
         setEditRows(rows);
     };
 
     const saveGroup = async () => {
-        if (online) toast.showLoading("Saqlanmoqda…"); else toast.showLoading("Offline: navbatga yozildi");
+        if (online) toast.showLoading("Saqlanmoqda…");
+        else toast.showLoading("Offline: navbatga yozildi");
         for (const r of editRows) {
             const qty = Number(r.qty || "0");
             const price = Number(r.price || "0");
@@ -135,26 +128,36 @@ export default function History() {
             else if (editType === "returns") await updateReturn(r.id, { qty, price });
         }
         if (online) {
-            try { await pushNow(); } catch { }
-            try { await pullNow(); } catch { }
+            try {
+                await pushNow();
+            } catch { }
+            try {
+                await pullNow();
+            } catch { }
         }
         setOpenKey(null);
         setEditType(null);
     };
 
     const removeRowFromGroup = async (rowId: string) => {
-        if (online) toast.showLoading("Saqlanmoqda…"); else toast.showLoading("Offline: navbatga yozildi");
+        if (online) toast.showLoading("Saqlanmoqda…");
+        else toast.showLoading("Offline: navbatga yozildi");
         if (editType === "sales") await removeSale(rowId);
         else if (editType === "returns") await removeReturn(rowId);
         setEditRows((rows) => rows.filter((r) => r.id !== rowId));
         if (online) {
-            try { await pushNow(); } catch { }
-            try { await pullNow(); } catch { }
+            try {
+                await pushNow();
+            } catch { }
+            try {
+                await pullNow();
+            } catch { }
         }
     };
 
     const removeWholeGroup = async (type: Tab, key: string) => {
-        if (online) toast.showLoading("Saqlanmoqda…"); else toast.showLoading("Offline: navbatga yozildi");
+        if (online) toast.showLoading("Saqlanmoqda…");
+        else toast.showLoading("Offline: navbatga yozildi");
         const g = type === "sales" ? saleGroups.find((x) => x.key === key) : returnGroups.find((x) => x.key === key);
         if (!g) return;
         for (const row of g.items) {
@@ -162,8 +165,12 @@ export default function History() {
             else await removeReturn(row.id);
         }
         if (online) {
-            try { await pushNow(); } catch { }
-            try { await pullNow(); } catch { }
+            try {
+                await pushNow();
+            } catch { }
+            try {
+                await pullNow();
+            } catch { }
         }
     };
 
@@ -200,9 +207,14 @@ export default function History() {
                             <TouchableOpacity
                                 onPress={() => openGroupEdit(type, g.key)}
                                 style={{
-                                    width: 36, height: 36, borderRadius: 18,
-                                    backgroundColor: "#fff", borderWidth: 1, borderColor: "#E9ECF1",
-                                    alignItems: "center", justifyContent: "center",
+                                    width: 36,
+                                    height: 36,
+                                    borderRadius: 18,
+                                    backgroundColor: "#fff",
+                                    borderWidth: 1,
+                                    borderColor: "#E9ECF1",
+                                    alignItems: "center",
+                                    justifyContent: "center",
                                 }}
                             >
                                 <Ionicons name="create-outline" size={18} color="#770E13" />
@@ -210,9 +222,14 @@ export default function History() {
                             <TouchableOpacity
                                 onPress={() => removeWholeGroup(type, g.key)}
                                 style={{
-                                    width: 36, height: 36, borderRadius: 18,
-                                    backgroundColor: "#FCE9EA", borderWidth: 1, borderColor: "#F4C7CB",
-                                    alignItems: "center", justifyContent: "center",
+                                    width: 36,
+                                    height: 36,
+                                    borderRadius: 18,
+                                    backgroundColor: "#FCE9EA",
+                                    borderWidth: 1,
+                                    borderColor: "#F4C7CB",
+                                    alignItems: "center",
+                                    justifyContent: "center",
                                 }}
                             >
                                 <Ionicons name="close-outline" size={18} color="#E23D3D" />
@@ -345,18 +362,14 @@ export default function History() {
                                         <View style={{ flexDirection: "row", gap: 8, marginTop: 6 }}>
                                             <TextInput
                                                 value={item.qty}
-                                                onChangeText={(v) =>
-                                                    setEditRows((rows) => rows.map((r) => (r.id === item.id ? { ...r, qty: v } : r)))
-                                                }
+                                                onChangeText={(v) => setEditRows((rows) => rows.map((r) => (r.id === item.id ? { ...r, qty: v } : r)))}
                                                 keyboardType="numeric"
                                                 placeholder="Миқдор"
                                                 style={{ flex: 1, borderWidth: 1, borderColor: C.border, borderRadius: 8, padding: 10 }}
                                             />
                                             <TextInput
                                                 value={item.price}
-                                                onChangeText={(v) =>
-                                                    setEditRows((rows) => rows.map((r) => (r.id === item.id ? { ...r, price: v } : r)))
-                                                }
+                                                onChangeText={(v) => setEditRows((rows) => rows.map((r) => (r.id === item.id ? { ...r, price: v } : r)))}
                                                 keyboardType="numeric"
                                                 placeholder="Нарх"
                                                 style={{ flex: 1, borderWidth: 1, borderColor: C.border, borderRadius: 8, padding: 10 }}
@@ -364,9 +377,15 @@ export default function History() {
                                             <TouchableOpacity
                                                 onPress={() => removeRowFromGroup(item.id)}
                                                 style={{
-                                                    width: 36, height: 36, borderRadius: 18,
-                                                    backgroundColor: "#FCE9EA", borderWidth: 1, borderColor: "#F4C7CB",
-                                                    alignItems: "center", justifyContent: "center", alignSelf: "center",
+                                                    width: 36,
+                                                    height: 36,
+                                                    borderRadius: 18,
+                                                    backgroundColor: "#FCE9EA",
+                                                    borderWidth: 1,
+                                                    borderColor: "#F4C7CB",
+                                                    alignItems: "center",
+                                                    justifyContent: "center",
+                                                    alignSelf: "center",
                                                 }}
                                             >
                                                 <Ionicons name="close-outline" size={18} color="#E23D3D" />
@@ -385,7 +404,7 @@ export default function History() {
                 </Modal>
             </View>
 
-            <Toast /> {/* ← markaziy toast */}
+            <Toast />
         </>
     );
 }

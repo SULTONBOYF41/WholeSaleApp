@@ -1,4 +1,5 @@
-import React, { useState } from "react";
+// components/UI.tsx
+import React, { isValidElement, useState } from "react";
 import {
     FlatList,
     Modal,
@@ -7,8 +8,10 @@ import {
     StyleSheet,
     Text,
     TextInput,
+    TextStyle,
     TouchableOpacity,
     View,
+    ViewStyle,
 } from "react-native";
 
 export const C = {
@@ -23,11 +26,33 @@ export const C = {
     success: "#059669",
 };
 
+type VS = { style?: ViewStyle | ViewStyle[] };
+
 export function Screen({ children, style }: { children: React.ReactNode; style?: any }) {
     return <View style={[{ flex: 1, backgroundColor: C.bg }, style]}>{children}</View>;
 }
 
-export function Card({ children, style }: { children: React.ReactNode; style?: any }) {
+/** --- Helper: Card ichiga string/number kelsa auto-<Text> --- */
+function wrapChildrenForView(children: React.ReactNode): React.ReactNode {
+    if (children == null) return null;
+    // Agar oddiy string/number bo'lsa — <Text> ga o'raymiz
+    if (typeof children === "string" || typeof children === "number") {
+        return <Text>{children}</Text>;
+    }
+    // Agar array bo'lsa — string/number elementlarni <Text> ga o'rab chiqamiz
+    if (Array.isArray(children)) {
+        return children.map((ch, idx) => {
+            if (typeof ch === "string" || typeof ch === "number") {
+                return <Text key={`t-${idx}`}>{ch}</Text>;
+            }
+            return isValidElement(ch) ? React.cloneElement(ch as any, { key: (ch as any)?.key ?? `c-${idx}` }) : ch;
+        });
+    }
+    // Boshqa holat — o'z holicha
+    return children;
+}
+
+export function Card({ children, style }: { children?: React.ReactNode; style?: any }) {
     return (
         <View
             style={[
@@ -41,25 +66,22 @@ export function Card({ children, style }: { children: React.ReactNode; style?: a
                 style,
             ]}
         >
-            {children}
+            {wrapChildrenForView(children)}
         </View>
     );
 }
 
-// ✅ H1 endi style ni qabul qiladi
-export function H1({ children, style }: { children: React.ReactNode; style?: any }) {
-    return <Text style={[{ fontSize: 24, fontWeight: "800", color: C.text }, style]}>{children}</Text>;
+// H1/H2/Muted: children’ni to‘g‘ridan-to‘g‘ri <Text> ichida chiqaramiz
+export function H1({ children, style }: { children?: React.ReactNode; style?: TextStyle | TextStyle[] }) {
+    return <Text style={[{ fontSize: 24, fontWeight: "800", color: C.text }, style as any]}>{children}</Text>;
 }
-export function H2({ children, style }: { children: React.ReactNode; style?: any }) {
-    return <Text style={[{ fontSize: 16, fontWeight: "800", color: C.text }, style]}>{children}</Text>;
+export function H2({ children, style }: { children?: React.ReactNode; style?: TextStyle | TextStyle[] }) {
+    return <Text style={[{ fontSize: 16, fontWeight: "800", color: C.text }, style as any]}>{children}</Text>;
 }
-
-
-export function Muted({ children, style }: { children: React.ReactNode; style?: any }) {
-    return <Text style={[{ color: C.muted }, style]}>{children}</Text>;
+export function Muted({ children, style }: { children?: React.ReactNode; style?: TextStyle | TextStyle[] }) {
+    return <Text style={[{ color: C.muted }, style as any]}>{children}</Text>;
 }
 
-// ✅ Button endi textStyle ni ham qabul qiladi
 export function Button({
     title,
     onPress,
@@ -72,8 +94,8 @@ export function Button({
     onPress: () => void;
     tone?: "primary" | "neutral" | "danger" | "success";
     disabled?: boolean;
-    style?: any;
-    textStyle?: any;
+    style?: ViewStyle | ViewStyle[];
+    textStyle?: TextStyle | TextStyle[];
 }) {
     const bg =
         tone === "primary" ? C.primary : tone === "success" ? C.success : tone === "danger" ? "#ef4444" : "#F5F6FA";
@@ -117,7 +139,7 @@ export function Input(props: any) {
     );
 }
 
-export function Chip({ active, label, style }: { active?: boolean; label: string; style?: any }) {
+export function Chip({ active, label, style }: { active?: boolean; label: string; style?: ViewStyle | ViewStyle[] }) {
     return (
         <View
             style={[
@@ -150,11 +172,12 @@ export function Select({
     onChange: (v: string) => void;
     options: { label: string; value: string }[];
     placeholder?: string;
-    style?: any;
-    itemStyle?: any;
+    style?: ViewStyle | ViewStyle[];
+    itemStyle?: ViewStyle | ViewStyle[];
 }) {
     const [open, setOpen] = useState(false);
     const current = options.find((o) => o.value === value)?.label ?? placeholder;
+
     return (
         <>
             <Pressable
@@ -172,6 +195,7 @@ export function Select({
             >
                 <Text style={{ color: value ? C.text : C.muted }}>{current}</Text>
             </Pressable>
+
             <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
                 <Pressable style={styles.backdrop} onPress={() => setOpen(false)} />
                 <View style={styles.sheet}>

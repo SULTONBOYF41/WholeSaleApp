@@ -44,7 +44,7 @@ export default function MainLayout() {
         return stores.find((x) => x.id === currentStoreId)?.name ?? "Рукшона — Меню";
     }, [stores, currentStoreId]);
 
-    // Header sarlavhasini yo‘lga qarab aniqlash
+    // Header sarlavhasi
     const headerTitle = useMemo(() => {
         // Xarajatlar
         if (np.startsWith("/expenses")) {
@@ -57,9 +57,10 @@ export default function MainLayout() {
         if (np.startsWith("/admin")) {
             if (np.includes("/catalog")) return "Админ — Каталог";
             if (np.includes("/add-store")) return "Админ — Филиал/Дўкон қўшиш";
+            if (np.includes("/summary")) return "Админ — Umumiy hisobot"; // ✅
             return "Админ";
         }
-        // Aks holda filial/do‘kon nomi
+        // Default: tanlangan bo‘lim nomi
         return defaultStoreName;
     }, [np, defaultStoreName]);
 
@@ -164,14 +165,19 @@ function LeftMenu({ onClose }: { onClose: () => void }) {
         router.push({ pathname: "/(main)/store/[id]/dashboard", params: { id } });
     };
 
-    const goAdmin = (href: "/(main)/admin/add-store" | "/(main)/admin/catalog") => {
+    const goAdmin = (
+        href:
+            | "/(main)/admin/add-store"
+            | "/(main)/admin/catalog"
+            | "/(main)/admin/summary" 
+    ) => {
         onClose();
         router.push(href);
     };
 
     const goExpenses = () => {
         onClose();
-        router.push("/(main)/expenses" as Href); // index -> report ga redirect qilgan bo'lsangiz shu qoladi
+        router.push("/(main)/expenses" as Href);
     };
 
     const logout = async () => {
@@ -212,6 +218,12 @@ function LeftMenu({ onClose }: { onClose: () => void }) {
             <TouchableOpacity onPress={() => goAdmin("/(main)/admin/catalog")} style={styles.adminItem}>
                 <Ionicons name="albums" size={18} color="#333" />
                 <Text style={styles.adminText}>Каталог</Text>
+            </TouchableOpacity>
+
+            {/* ✅ Umumiy Hisobot menyusi */}
+            <TouchableOpacity onPress={() => goAdmin("/(main)/admin/summary")} style={styles.adminItem}>
+                <Ionicons name="stats-chart" size={18} color="#333" />
+                <Text style={styles.adminText}>Umumiy Hisobot</Text>
             </TouchableOpacity>
 
             <View style={styles.separator} />

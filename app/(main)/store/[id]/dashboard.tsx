@@ -1,23 +1,19 @@
 // app/(main)/store/[id]/dashboard.tsx
 import Toast from "@/components/Toast";
 import { exportDashboardPdf } from "@/lib/pdf";
+import { supabase } from "@/lib/supabase";
 import { useAppStore } from "@/store/appStore";
 import { useToastStore } from "@/store/toastStore";
-import { useLocalSearchParams } from "expo-router";
-import React, { useMemo, useState } from "react";
-import {
-    Linking,
-    Modal,
-    Pressable,
-    ScrollView,
-    Text,
-    TouchableOpacity,
-    View,
-} from "react-native";
+import type { MonthlySummary } from "@/types";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import * as Sharing from "expo-sharing";
+import React, { useEffect, useMemo, useState } from "react";
+import { Linking, Modal, Pressable, ScrollView, Text, TouchableOpacity, View } from "react-native";
 
 const P = "#770E13";
 
 export default function Dashboard() {
+    const router = useRouter();
     const { id } = useLocalSearchParams<{ id: string }>();
     const allSales = useAppStore((s) => s.sales);
     const allReturns = useAppStore((s) => s.returns);
@@ -27,16 +23,22 @@ export default function Dashboard() {
 
     const toast = useToastStore();
 
-    // PDF modal holati
+    // PDF modal
     const [pdfModalOpen, setPdfModalOpen] = useState(false);
     const [pdfLink, setPdfLink] = useState<string | null>(null);
     const [pdfName, setPdfName] = useState<string>("Hisobot.pdf");
 
-    // Oy tanlovi
+    // Oy (YYYY-MM)
     const [month, setMonth] = useState<string>(() => {
         const d = new Date();
         return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
     });
+
+    // Server summary row
+    const [msRow, setMsRow] = useState<MonthlySummary | null>(null);
+    const [msLoading, setMsLoading] = useState(false);
+
+    // Lokal filter faqat rank/backup uchun
     const inMonth = (t: number) => {
         const d = new Date(t);
         const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
@@ -56,11 +58,16 @@ export default function Dashboard() {
         [cash, id, month]
     );
 
-    const totalSales = useMemo(() => sales.reduce((a, s) => a + s.price * s.qty, 0), [sales]);
-    const totalCash = useMemo(() => receipts.reduce((a, r) => a + r.amount, 0), [receipts]);
-    const debt = Math.max(totalSales - totalCash, 0);
-    const returnCount = returns.length;
+    // Lokal fallback totals
+    const localTotalSales = useMemo(() => sales.reduce((a, s) => a + s.price * s.qty, 0), [sales]);
+    const localTotalReturns = useMemo(() => returns.reduce((a, r) => a + r.price * r.qty, 0), [returns]);
+    const localTotalCash = useMemo(() => receipts.reduce((a, r) => a + r.amount, 0), [receipts]);
+    const localDebt = Math.max(localTotalSales - localTotalReturns - localTotalCash, 0);
 
+    // <<<<<< TUZATISH: “Vazvrat (miqdor)” — qty yig‘indisi
+    const returnsQty = useMemo(() => returns.reduce((a, r) => a + r.qty, 0), [returns]);
+
+    // Ranklar
     const salesRank = useMemo(() => {
         const map = new Map<string, { qty: number; total: number }>();
         for (const s of sales) {
@@ -86,35 +93,77 @@ export default function Dashboard() {
 
     const money = (n: number) => `${(n || 0).toLocaleString()} so‘m`;
 
-    // PDF export: toast → generate → toast.hide → modal
-    const exportPdf = async () => {
-        toast.showLoading("Saqlanmoqda…", 0); // qo‘lda yopamiz
-        let result: any = null;
+    // Serverdan monthly_store_summary olish
+    const fetchSummary = async () => {
+        if (!id) return;
+        setMsLoading(true);
         try {
-            result = await exportDashboardPdf({
+            const { data, error } = await supabase
+                .from("monthly_store_summary")
+                .select("*")
+                .eq("ym", month)
+                .eq("store_id", id)
+                .maybeSingle();
+
+            if (error) setMsRow(null);
+            else setMsRow((data as any) ?? null);
+        } finally {
+            setMsLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        fetchSummary();
+    }, [id, month]);
+
+    // Realtime – o‘zgarishlarda qayta o‘qish
+    useEffect(() => {
+        if (!id) return;
+        const channel = supabase
+            .channel(`mss:${id}:${month}`)
+            .on(
+                "postgres_changes",
+                {
+                    event: "*",
+                    schema: "public",
+                    table: "monthly_store_summary",
+                    filter: `store_id=eq.${id},ym=eq.${month}`,
+                },
+                () => fetchSummary()
+            )
+            .subscribe();
+
+        return () => {
+            supabase.removeChannel(channel);
+        };
+    }, [id, month]);
+
+    // PDF export
+    const exportPdf = async () => {
+        toast.showLoading("Hisobot tayyorlanmoqda…", 0);
+        try {
+            const totals = {
+                totalSales: msRow?.total_sales ?? localTotalSales,
+                totalCash: msRow?.total_cash ?? localTotalCash,
+                debt: msRow?.debt ?? localDebt,
+                // <<<<<< TUZATISH: qty yig‘indisi yuboramiz
+                returnCount: returnsQty,
+            };
+            const result = await exportDashboardPdf({
                 storeName,
                 periodLabel: month,
-                cards: { totalSales, totalCash, debt, returnCount },
+                cards: totals,
                 salesRank,
                 returnRank,
             });
-        } catch (e) {
-            // xohlasangiz: toast.show("Xatolik yuz berdi")
+
+            setPdfName(result?.name ?? `Hisobot_${storeName || "Store"}_${month}.pdf`);
+            setPdfLink(result?.uri ?? null);
+            toast.hide();
+            setPdfModalOpen(true);
+        } catch {
+            toast.hide();
         }
-        toast.hide();
-
-        const link =
-            typeof result === "string"
-                ? result
-                : (result?.uri as string) || (result?.url as string) || null;
-
-        const nameGuess =
-            (result?.name as string) ||
-            `Hisobot_${storeName || "Store"}_${month}.pdf`;
-
-        setPdfName(nameGuess);
-        setPdfLink(link);
-        setPdfModalOpen(true);
     };
 
     const shiftMonth = (delta: number) => {
@@ -123,10 +172,41 @@ export default function Dashboard() {
         setMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
     };
 
-    const openPdf = async () => {
+    const openPdfExternal = async () => {
         if (!pdfLink) return;
-        try { await Linking.openURL(pdfLink); } catch { }
+        try {
+            const url = encodeURI(pdfLink);
+            await Linking.openURL(url);
+        } catch { }
     };
+
+    const sharePdf = async () => {
+        if (!pdfLink) return;
+        try {
+            const canShare = await Sharing.isAvailableAsync();
+            if (!canShare) return openPdfExternal();
+            await Sharing.shareAsync(pdfLink, {
+                mimeType: "application/pdf",
+                dialogTitle: pdfName,
+                UTI: "com.adobe.pdf",
+            });
+        } catch { }
+    };
+
+    // <<<<<< Yangi: alohida betda ochish (report-viewer)
+    const openPdfInScreen = () => {
+        if (!pdfLink) return;
+        router.push({
+            pathname: "/(main)/admin/report-viewer",
+            params: { uri: pdfLink, title: pdfName },
+        });
+    };
+
+    // Ko‘rinadigan total’lar (server > lokal)
+    const viewTotalSales = msRow?.total_sales ?? localTotalSales;
+    const viewTotalReturns = msRow?.total_returns ?? localTotalReturns;
+    const viewTotalCash = msRow?.total_cash ?? localTotalCash;
+    const viewDebt = msRow?.debt ?? localDebt;
 
     return (
         <>
@@ -136,7 +216,9 @@ export default function Dashboard() {
                     <TouchableOpacity onPress={() => shiftMonth(-1)} style={{ padding: 6 }}>
                         <Text style={{ fontWeight: "800" }}>‹</Text>
                     </TouchableOpacity>
-                    <Text style={{ fontWeight: "800", fontSize: 16, marginHorizontal: 8 }}>{month}</Text>
+                    <Text style={{ fontWeight: "800", fontSize: 16, marginHorizontal: 8 }}>
+                        {month}{msLoading ? " …" : ""}
+                    </Text>
                     <TouchableOpacity onPress={() => shiftMonth(1)} style={{ padding: 6 }}>
                         <Text style={{ fontWeight: "800" }}>›</Text>
                     </TouchableOpacity>
@@ -158,12 +240,12 @@ export default function Dashboard() {
                 {/* 2x2 cards */}
                 <View style={{ flexDirection: "row", gap: 12 }}>
                     <View style={{ flex: 1, gap: 12 }}>
-                        <StatCard title="Umumiy summa" value={money(totalSales)} />
-                        <StatCard title="Qarz" value={money(debt)} />
+                        <StatCard title="Umumiy summa" value={money(viewTotalSales)} />
+                        <StatCard title="Qarz" value={money(viewDebt)} />
                     </View>
                     <View style={{ flex: 1, gap: 12 }}>
-                        <StatCard title="Olingan summa" value={money(totalCash)} />
-                        <StatCard title="Vazvrat (miqdor)" value={String(returnCount)} />
+                        <StatCard title="Olingan summa" value={money(viewTotalCash)} />
+                        <StatCard title="Vazvrat (miqdor)" value={String(returnsQty)} />
                     </View>
                 </View>
 
@@ -178,18 +260,12 @@ export default function Dashboard() {
             </ScrollView>
 
             {/* PDF MODAL */}
-            <Modal
-                visible={pdfModalOpen}
-                transparent
-                animationType="fade"
-                onRequestClose={() => setPdfModalOpen(false)}
-            >
+            <Modal visible={pdfModalOpen} transparent animationType="fade" onRequestClose={() => setPdfModalOpen(false)}>
                 <Pressable
                     onPress={() => setPdfModalOpen(false)}
                     style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.2)", justifyContent: "center", padding: 24 }}
                 >
                     <View
-                        // Eslatma: Matnlar faqat <Text> ichida! Bu yerda View ichida faqat View/Text/Tugmalar bor.
                         style={{
                             backgroundColor: "#fff",
                             borderRadius: 16,
@@ -206,8 +282,7 @@ export default function Dashboard() {
                         <Text style={{ fontSize: 18, fontWeight: "900", color: P }}>PDF hisobot tayyor!</Text>
 
                         <Text style={{ marginTop: 8, color: "#4B5563" }}>
-                            Quyidagi havola — tanlagan davrdagi ({month}) “{storeName || "Do‘kon"}” uchun
-                            avtomatik hosil qilingan PDF hisobot. Uni ochishingiz yoki keyinroq ulashishingiz mumkin.
+                            Quyidagi havola — tanlagan davrdagi ({month}) “{storeName || "Do‘kon"}” uchun PDF hisobot.
                         </Text>
 
                         <View
@@ -221,36 +296,38 @@ export default function Dashboard() {
                             }}
                         >
                             <Text style={{ fontWeight: "800" }}>{pdfName}</Text>
-                            <Text
-                                style={{ color: "#2563EB", marginTop: 6, textDecorationLine: "underline" }}
-                                numberOfLines={2}
-                            >
-                                {String(pdfLink ?? "Havola topilmadi")}
-                            </Text>
+
+                            <TouchableOpacity disabled={!pdfLink} onPress={openPdfExternal} activeOpacity={0.7}>
+                                <Text
+                                    style={{ color: pdfLink ? "#2563EB" : "#94A3B8", marginTop: 6, textDecorationLine: "underline" }}
+                                    numberOfLines={2}
+                                >
+                                    {String(pdfLink ?? "Havola topilmadi")}
+                                </Text>
+                            </TouchableOpacity>
                         </View>
 
                         <View style={{ flexDirection: "row", gap: 10, marginTop: 14, justifyContent: "flex-end" }}>
                             <TouchableOpacity
                                 onPress={() => setPdfModalOpen(false)}
-                                style={{
-                                    paddingVertical: 12,
-                                    paddingHorizontal: 16,
-                                    borderRadius: 12,
-                                    backgroundColor: "#F3F4F6",
-                                }}
+                                style={{ paddingVertical: 12, paddingHorizontal: 16, borderRadius: 12, backgroundColor: "#F3F4F6" }}
                             >
                                 <Text style={{ fontWeight: "800" }}>Yopish</Text>
                             </TouchableOpacity>
 
                             <TouchableOpacity
                                 disabled={!pdfLink}
-                                onPress={openPdf}
-                                style={{
-                                    paddingVertical: 12,
-                                    paddingHorizontal: 16,
-                                    borderRadius: 12,
-                                    backgroundColor: pdfLink ? P : "#D1D5DB",
-                                }}
+                                onPress={sharePdf}
+                                style={{ paddingVertical: 12, paddingHorizontal: 16, borderRadius: 12, backgroundColor: pdfLink ? "#10B981" : "#D1D5DB" }}
+                            >
+                                <Text style={{ fontWeight: "800", color: "#fff" }}>Ulashish</Text>
+                            </TouchableOpacity>
+
+                            {/* <<<<<< Alohida betda ochish */}
+                            <TouchableOpacity
+                                disabled={!pdfLink}
+                                onPress={openPdfInScreen}
+                                style={{ paddingVertical: 12, paddingHorizontal: 16, borderRadius: 12, backgroundColor: pdfLink ? P : "#D1D5DB" }}
                             >
                                 <Text style={{ fontWeight: "800", color: "#fff" }}>Ochish</Text>
                             </TouchableOpacity>
@@ -265,7 +342,6 @@ export default function Dashboard() {
 }
 
 /** --- Presentational components --- */
-
 function StatCard({ title, value }: { title: string; value: string }) {
     return (
         <View
@@ -282,7 +358,6 @@ function StatCard({ title, value }: { title: string; value: string }) {
         </View>
     );
 }
-
 function RankTableSales({ rows }: { rows: { name: string; qty: number; total: number }[] }) {
     if (rows.length === 0) return <Text style={{ color: "#777" }}>Reyting bo‘sh</Text>;
     return (
@@ -319,20 +394,7 @@ function RankTableReturns({ rows }: { rows: { name: string; qty: number }[] }) {
         </View>
     );
 }
-
-function Cell({
-    label,
-    bold,
-    right,
-    width,
-    flex,
-}: {
-    label: string;
-    bold?: boolean;
-    right?: boolean;
-    width?: number;
-    flex?: boolean;
-}) {
+function Cell({ label, bold, right, width, flex }: { label: string; bold?: boolean; right?: boolean; width?: number; flex?: boolean }) {
     return (
         <View
             style={{
@@ -344,14 +406,7 @@ function Cell({
                 paddingHorizontal: 10,
             }}
         >
-            <Text
-                style={{
-                    fontWeight: bold ? "800" : "400",
-                    textAlign: right ? "right" : "left",
-                }}
-            >
-                {label}
-            </Text>
+            <Text style={{ fontWeight: bold ? "800" : "400", textAlign: right ? "right" : "left" }}>{label}</Text>
         </View>
     );
 }

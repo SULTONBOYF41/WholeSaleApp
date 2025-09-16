@@ -9,6 +9,13 @@ app/
 │  ├─ admin/
 │  │  ├─ add-store.tsx                # Филиал/Дўкон қўшиш (radio, kategoriya narxlari, CRUD ro‘yxat)
 │  │  ├─ catalog.tsx                  # Каталог: nom + filial/do‘kon narx, ro‘yxat, CRUD
+│  ├─ expenses/
+│  │  ├─ _layout.tsx                
+│  │  ├─ bank.tsx  
+│  │  ├─ family.tsx  
+│  │  ├─ index.tsx  
+│  │  ├─ report.tsx  
+│  │  ├─ shop.tsx  
 │  └─ store/
 │     └─ [id]/
 │        ├─ _layout.tsx               # Pastki fixed tablar: Дашборд / Сотув / Қайтариш
@@ -17,16 +24,27 @@ app/
 │        ├─ history.tsx
 │        └─ returns.tsx               # Қайтариш: forma + addReturn
 components/
+├─ expenses/
+│  ├─ ExpenseComposer.tsx                     
+│  ├─ ExpenseRow.tsx   
+│  ├─ HistoryCard.tsx  
+│  ├─ ReportCards.tsx  
 ├─ UI.tsx 
+├─ NetBanner.tsx 
+├─ Toast.tsx 
+├─ PdfModal.tsx 
 lib/
 ├─ supabase.ts                         # Supabase client (authsiz, realtime yoqilgan)
 ├─ net.ts
+├─ pdf.ts
 ├─ device.ts  
 ├─ local-auth.ts                       # Lokal sign-in (AsyncStorage’da flag)
 └─ storage.ts                          # AsyncStorage helper’lar (getJSON/setJSON, kalitlar)
 store/
 ├─ inventoryStore.ts
 ├─ syncStore.ts
+├─ expensesStore.ts
+├─ toastStore.ts
 └─ appStore.ts                         # Barcha state/CRUD/Queue + Push/Pull/Realtime (Zustand)
 types/
 └─ index.ts                            # Tiplar: Store/Category/Product/Sale/Return/QueueItem va hok.
@@ -36,3 +54,92 @@ utils/
 
 
 
+
+
+; REJA !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+1️⃣ Analiz va tayyorgarlik
+
+ Hozirgi jadval strukturasini ko‘rib chiqamiz (sales, returns, cash_receipts, stores va h.k.).
+
+ Hisobot uchun kerakli ustunlar ro‘yxatini tuzamiz (do‘kon nomi, sana, summa, qarz formulasi).
+
+ Ma’lumot hajmi bo‘yicha baho: 1 oyda taxminan nechta yozuv tushadi → qaysi paytdan arxivlash kerakligini belgilaymiz (masalan, 3 oydan keyin).
+
+📌 Natija: texnik talablarga mos jadval/ustunlar hujjati.
+
+2️⃣ Umumiy yig‘ma (summary) jadvallarini yaratish
+
+ monthly_store_summary jadvalini SQL’da ochish.
+(Do‘kon/filial bo‘yicha oyma-oy sotuv, qaytarish, tushum, qarz.)
+
+ recompute_monthly_summary(ym) funksiyasini yozish.
+(Bir oy uchun umumiy natija qayta hisoblanadi.)
+
+ Test: 1–2 oy uchun mavjud ma’lumotlardan hisobot chiqarish.
+
+📌 Natija: tezkor umumiy hisobot chiqariladigan jadval.
+
+3️⃣ Arxivlash mexanizmi
+
+ archive sxemasini yaratish (masalan: archive.sales).
+
+ archive_month(ym) funksiyasini yozish.
+(Eski yozuvlarni hot jadvallardan arxivga ko‘chiradi.)
+
+ Test: eski oy ma’lumotlarini ko‘chirib ko‘rish → hisobotda natija o‘zgarmasligi kerak.
+
+📌 Natija: Supabase to‘lib qolmaydigan tizim.
+
+4️⃣ Qarz (Debt)ni xavfsiz yuritish
+
+ ledger_entries jadvalini yaratish.
+(Har bir sotuv, qaytarish, tushum yozuvini +/– belgisi bilan kiritish.)
+
+ Yangi yozuvlar kiritilganda ledger ham yangilanadigan trigger yozish.
+
+ Test: 1 ta sotuv, 1 ta tushum qo‘shib qarzni tekshirish.
+
+📌 Natija: qarz har doim aniq va yo‘qolmaydigan bo‘ladi.
+
+5️⃣ Dashboard integratsiyasi
+
+ “Umumiy hisobot” bo‘limini qo‘shish.
+
+Foydalanuvchi oyni tanlasa → monthly_store_summarydan ma’lumot keladi.
+
+Agar arxivdan ko‘rilsa → archivedan yoki PDF yuklab olish imkoniyati.
+
+ PDF yaratish tugmasi:
+
+Jarayon: toast.show("Hisobot tayyorlanmoqda…")
+
+Tugagach: o‘rtada popup → “Mana sizning PDF hisobot linki”.
+
+📌 Natija: mijoz oddiy tugma bosib oylik hisobotni ko‘radi yoki yuklab oladi.
+
+6️⃣ Avtomatlashtirish
+
+ Supabase Edge Function yoki pg_cron yordamida:
+
+Har kuni kechasi → recompute_monthly_summary
+
+Har oy boshida → archive_month
+
+ Test: avtomatlashtirilgan cron ishlayotganini loglarda tekshirish.
+
+📌 Natija: tizim doimiy ravishda o‘zi ishlaydi, qo‘lda aralashish kerak emas.
+
+7️⃣ Hujjatlash va trening
+
+ Admin panel foydalanuvchilari uchun qisqa qo‘llanma yozish:
+
+“Umumiy hisobot”ni qanday olish
+
+PDF yuklab olish
+
+Arxivdan ma’lumot olish
+
+ Jamoa ichida 1 kunlik trening: yangi jarayonni tushuntirish.
+
+📌 Natija: mijoz o‘zi mustaqil ishlay oladi.

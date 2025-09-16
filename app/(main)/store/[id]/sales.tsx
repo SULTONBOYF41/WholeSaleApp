@@ -1,9 +1,8 @@
-// app/(main)/store/[id]/sales.tsx
-import Toast from "@/components/Toast"; // ← qo'shildi
+import Toast from "@/components/Toast";
 import { supabase } from "@/lib/supabase";
 import { useAppStore } from "@/store/appStore";
 import { useSyncStore } from "@/store/syncStore";
-import { useToastStore } from "@/store/toastStore"; // ← qo'shildi
+import { useToastStore } from "@/store/toastStore";
 import type { Product, Unit } from "@/types";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect, useLocalSearchParams } from "expo-router";
@@ -45,7 +44,7 @@ export default function Sales() {
     const store = stores.find((s) => s.id === id);
     const online = useSyncStore((s) => s.online);
 
-    const toast = useToastStore();                        // ← qo'shildi
+    const toast = useToastStore();
 
     const [rows, setRows] = useState<Row[]>([{ key: "r1", qty: "", price: "", unit: "дона" }]);
     const [cash, setCash] = useState("");
@@ -129,13 +128,10 @@ export default function Sales() {
     const filteredProducts = useMemo(() => {
         const q = search.trim().toLowerCase();
         if (!q) return products;
-        return products.filter((p) => p.name.toLowerCase().includes(q));
+        return products.filter((p) => (p.name || "").toLowerCase().includes(q));
     }, [products, search]);
 
-    const total = useMemo(
-        () => rows.reduce((a, r) => a + (Number(r.qty) || 0) * (Number(r.price) || 0), 0),
-        [rows]
-    );
+    const total = useMemo(() => rows.reduce((a, r) => a + (Number(r.qty) || 0) * (Number(r.price) || 0), 0), [rows]);
 
     const openPicker = (rowKey: string) => setPickOpenFor(rowKey);
     const selectProduct = (p: Product) => {
@@ -154,7 +150,8 @@ export default function Sales() {
     const removeRow = (key: string) => setRows((r) => (r.length > 1 ? r.filter((x) => x.key !== key) : r));
 
     const saveAll = async () => {
-        if (online) toast.showLoading("Saqlanmoqda…"); else toast.showLoading("Offline: navbatga yozildi");
+        if (online) toast.showLoading("Saqlanmoqda…");
+        else toast.showLoading("Offline: navbatga yozildi");
         const batchId = "b-" + Date.now().toString(36);
         try {
             for (const r of rows) {
@@ -170,11 +167,14 @@ export default function Sales() {
             }
             setRows([{ key: "r1", qty: "", price: "", unit: "дона" }]);
 
-            try { await useAppStore.getState().pushNow(); } catch { }
-            try { await useAppStore.getState().pullNow(); } catch { }
+            try {
+                await useAppStore.getState().pushNow();
+            } catch { }
+            try {
+                await useAppStore.getState().pullNow();
+            } catch { }
         } finally {
-            // auto-hide bor; xohlasangiz qo'lda ham yopishingiz mumkin:
-            // toast.hide();
+            // toast auto-hide
         }
     };
 
@@ -183,7 +183,8 @@ export default function Sales() {
         const amt = Number(cash || "0");
         if (!amt || !id) return;
 
-        if (online) toast.showLoading("Saqlanmoqda…"); else toast.showLoading("Offline: navbatga yozildi");
+        if (online) toast.showLoading("Saqlanmoqda…");
+        else toast.showLoading("Offline: navbatga yozildi");
 
         if (online) {
             const { error } = await supabase.from("cash_receipts").insert({ store_id: id, amount: amt });
@@ -208,7 +209,8 @@ export default function Sales() {
 
     const submitEditCash = async () => {
         if (!editCashId) return;
-        if (online) toast.showLoading("Saqlanmoqda…"); else toast.showLoading("Offline: navbatga yozildi");
+        if (online) toast.showLoading("Saqlanmoqda…");
+        else toast.showLoading("Offline: navbatga yozildi");
 
         const amt = Number(editCashAmount || "0");
         if (online) {
@@ -224,7 +226,8 @@ export default function Sales() {
     };
 
     const deleteCashItem = async (cid: string) => {
-        if (online) toast.showLoading("Saqlanmoqda…"); else toast.showLoading("Offline: navbatga yozildi");
+        if (online) toast.showLoading("Saqlanmoqda…");
+        else toast.showLoading("Offline: navbatga yozildi");
 
         if (online) {
             const { error } = await supabase.from("cash_receipts").delete().eq("id", cid);
@@ -303,7 +306,7 @@ export default function Sales() {
                                     justifyContent: "center",
                                 }}
                             >
-                                <Ionicons name="remove" size={18} color="#770E13" />
+                                <Ionicons name="remove-circle-outline" size={18} color="#770E13" />
                             </TouchableOpacity>
                         </View>
 
@@ -333,14 +336,9 @@ export default function Sales() {
                     <Text style={{ fontWeight: "800", color: "#fff" }}>Қатор қўшиш</Text>
                 </TouchableOpacity>
 
-                <Text style={{ fontWeight: "800", marginTop: 12 }}>
-                    Умумий сумма: {total.toLocaleString()} so‘m
-                </Text>
+                <Text style={{ fontWeight: "800", marginTop: 12 }}>Умумий сумма: {total.toLocaleString()} so‘m</Text>
 
-                <TouchableOpacity
-                    onPress={saveAll}
-                    style={{ backgroundColor: "#770E13", padding: 14, borderRadius: 12, marginTop: 8 }}
-                >
+                <TouchableOpacity onPress={saveAll} style={{ backgroundColor: "#770E13", padding: 14, borderRadius: 12, marginTop: 8 }}>
                     <Text style={{ color: "#fff", textAlign: "center", fontWeight: "800" }}>Сақлаш</Text>
                 </TouchableOpacity>
 
@@ -405,9 +403,7 @@ export default function Sales() {
                                     >
                                         <View style={{ flex: 1, paddingRight: 10 }}>
                                             <Text style={{ fontWeight: "800" }}>{Number(r.amount).toLocaleString()} so‘m</Text>
-                                            <Text style={{ color: "#777", fontSize: 12, marginTop: 2 }}>
-                                                {new Date(r.created_at).toLocaleString()}
-                                            </Text>
+                                            <Text style={{ color: "#777", fontSize: 12, marginTop: 2 }}>{new Date(r.created_at).toLocaleString()}</Text>
                                         </View>
 
                                         <View style={{ flexDirection: "row", gap: 8 }}>
@@ -450,7 +446,7 @@ export default function Sales() {
                 </View>
             </ScrollView>
 
-            {/* eski “saving” overlay olib tashlandi */}
+            {/* Product picker */}
             <Modal visible={!!pickOpenFor} transparent animationType="fade" onRequestClose={() => setPickOpenFor(null)}>
                 <Pressable
                     onPress={() => setPickOpenFor(null)}
@@ -458,12 +454,7 @@ export default function Sales() {
                 >
                     <View style={{ backgroundColor: "#fff", borderRadius: 12, maxHeight: "70%", overflow: "hidden" }}>
                         <View style={{ padding: 12, borderBottomWidth: 1, borderColor: "#eee" }}>
-                            <TextInput
-                                placeholder="Қидирув..."
-                                value={search}
-                                onChangeText={setSearch}
-                                style={{ borderWidth: 1, borderRadius: 10, padding: 10 }}
-                            />
+                            <TextInput placeholder="Қидирув..." value={search} onChangeText={setSearch} style={{ borderWidth: 1, borderRadius: 10, padding: 10 }} />
                         </View>
                         <FlatList
                             data={filteredProducts}
@@ -482,6 +473,7 @@ export default function Sales() {
                 </Pressable>
             </Modal>
 
+            {/* Edit cash */}
             <Modal visible={!!editCashId} transparent animationType="fade" onRequestClose={() => setEditCashId(null)}>
                 <Pressable
                     onPress={() => setEditCashId(null)}
@@ -526,7 +518,7 @@ export default function Sales() {
                 </Pressable>
             </Modal>
 
-            <Toast /> {/* ← markaziy toast */}
+            <Toast />
         </KeyboardAvoidingView>
     );
 }

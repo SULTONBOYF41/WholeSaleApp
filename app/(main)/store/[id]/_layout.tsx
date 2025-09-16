@@ -1,55 +1,68 @@
 // app/(main)/store/[id]/_layout.tsx
 import { C } from "@/components/UI";
 import { Ionicons } from "@expo/vector-icons";
-import { Slot, router, useLocalSearchParams, usePathname } from "expo-router";
+import { Slot, useLocalSearchParams, usePathname, useRouter } from "expo-router";
 import React, { useMemo } from "react";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+type TabDef = {
+    key: "dashboard" | "sales" | "returns" | "history";
+    label: string;
+    icon: keyof typeof Ionicons.glyphMap;
+    href: (id: string) => string;
+};
+
 export default function StoreLayout() {
-    const { id } = useLocalSearchParams<{ id: string }>();
+    const { id } = useLocalSearchParams<{ id?: string }>();
     const sid = String(id ?? "");
     const pathname = usePathname();
+    const router = useRouter();
 
-    // Hreflarni funksiya bilan quramiz (replace o‘rniga)
-    const tabs = useMemo(
+    // Hreflarni funksiya bilan quramiz (router.push safe)
+    const tabs: TabDef[] = useMemo(
         () => [
             {
                 key: "dashboard",
                 label: "Hisobot",
-                icon: "speedometer-outline" as const,
-                href: (id: string) => `/(main)/store/${id}/dashboard`,
+                icon: "speedometer-outline",
+                href: (id) => `/(main)/store/${id}/dashboard`,
             },
             {
                 key: "sales",
                 label: "Sotuv",
-                icon: "cart-outline" as const,
-                href: (id: string) => `/(main)/store/${id}/sales`,
+                icon: "cart-outline",
+                href: (id) => `/(main)/store/${id}/sales`,
             },
             {
                 key: "returns",
                 label: "Vazvrat",
-                icon: "return-down-back-outline" as const,
-                href: (id: string) => `/(main)/store/${id}/returns`,
+                icon: "return-down-back-outline",
+                href: (id) => `/(main)/store/${id}/returns`,
             },
             {
                 key: "history",
                 label: "Monitoring",
-                icon: "time-outline" as const,
-                href: (id: string) => `/(main)/store/${id}/history`,
+                icon: "time-outline",
+                href: (id) => `/(main)/store/${id}/history`,
             },
         ],
         []
     );
 
-    const isActive = (href: string) => Boolean(pathname?.startsWith(href));
+    const isActive = (href: string) => !!pathname && pathname.startsWith(href);
 
-    // TypeScript Href literal talabini chetlab o‘tamiz (custom tabbar uchun normal)
-    const go = (href: string) => router.push(href as any);
+    const go = (href: string) => {
+        // id bo'lmasa, hech narsa qilmaymiz
+        if (!sid) return;
+        // Shundoq shu route bo'lsa, push qilmaymiz
+        if (pathname === href) return;
+        router.push(href as any);
+    };
 
     return (
         <View style={styles.root}>
-            {/* Content, pastki tablar uchun bo'sh joy */}
+            {/* Kontent (pastki tablar uchun joy qoldiramiz) */}
             <View style={{ flex: 1, paddingBottom: 72 }}>
                 <Slot />
             </View>
@@ -60,22 +73,33 @@ export default function StoreLayout() {
                     {tabs.map((t) => {
                         const href = t.href(sid);
                         const active = isActive(href);
+                        const disabled = !sid;
+
                         return (
                             <TouchableOpacity
                                 key={t.key}
                                 onPress={() => go(href)}
-                                style={[styles.tabItem, active && styles.tabItemActive]}
+                                disabled={disabled}
+                                accessibilityRole="button"
+                                style={[
+                                    styles.tabItem,
+                                    active && styles.tabItemActive,
+                                    disabled && { opacity: 0.5 },
+                                ]}
+                                activeOpacity={0.8}
                             >
                                 <Ionicons
                                     name={t.icon}
                                     size={20}
                                     color={active ? C.primary : "#6B7280"}
                                 />
+                                {/* MUHIM: Matn doim <Text> ichida */}
                                 <Text
                                     style={[
                                         styles.tabLabel,
                                         { color: active ? C.primary : "#6B7280" },
                                     ]}
+                                    numberOfLines={1}
                                 >
                                     {t.label}
                                 </Text>
