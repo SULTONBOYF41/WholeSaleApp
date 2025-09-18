@@ -1,7 +1,7 @@
 // app/(main)/expenses/report.tsx
 import { ReportCards } from "@/components/expenses/ReportCards";
 import { Button, H2 } from "@/components/UI";
-import { supabase } from "@/lib/supabase"; // ← agar yo‘li boshqacha bo‘lsa moslang
+import { supabase } from "@/lib/supabase";
 import { useExpensesStore } from "@/store/expensesStore";
 import { useSyncStore } from "@/store/syncStore";
 import * as Print from "expo-print";
@@ -20,7 +20,6 @@ export default function ReportScreen() {
     const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
-    // Totallarni xavfsiz tayyorlash
     const safeTotals = useMemo(() => {
         const tObj: Partial<{ family: number; shop: number; bank: number; total: number }> = totals ?? {};
         const f = Number(tObj.family ?? 0);
@@ -30,43 +29,39 @@ export default function ReportScreen() {
         return { family: f, shop: s, bank: b, total: t };
     }, [totals]);
 
-    // Navigatsiya: kartaga bosilganda bo‘limga o‘tish
     const onGoFamily = () => router.replace("/(main)/expenses/family");
     const onGoShop = () => router.replace("/(main)/expenses/shop");
     const onGoBank = () => router.replace("/(main)/expenses/bank");
 
-    // Realtime obuna
+    // Realtime: expenses jadvali o'zgarsa, qayta yuklaymiz
     const subscribeRealtime = useCallback(() => {
-        // eski kanal bo‘lsa yopamiz
         if (channelRef.current) {
             try { supabase.removeChannel(channelRef.current as any); } catch { }
             channelRef.current = null;
         }
 
         const ch = supabase
-            .channel("expenses-realtime")
+            .channel("expenses-realtime-report")
             .on(
                 "postgres_changes",
                 { event: "*", schema: "public", table: "expenses" },
-                () => { fetchAll(); } // har qanday o‘zgarishda yangilaymiz (RLS sizniki bo‘lgani uchun faqat o‘zingizni olasiz)
+                () => { fetchAll(); }
             )
             .subscribe();
+
         channelRef.current = ch;
     }, [fetchAll]);
 
-    // Polling (engil, 8s) – faqat onlayn va fokusda
+    // 8s polling (faqat onlaynda)
     const startPolling = useCallback(() => {
         if (pollRef.current) return;
-        pollRef.current = setInterval(() => {
-            fetchAll();
-        }, 8000);
+        pollRef.current = setInterval(() => { fetchAll(); }, 8000);
     }, [fetchAll]);
 
     const stopPolling = useCallback(() => {
         if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
     }, []);
 
-    // Fokusga kirganda: fetch + realtime + polling
     useFocusEffect(
         useCallback(() => {
             fetchAll();
@@ -74,7 +69,6 @@ export default function ReportScreen() {
             if (online) startPolling();
 
             return () => {
-                // fokusdan chiqishda tozalash
                 stopPolling();
                 if (channelRef.current) {
                     try { supabase.removeChannel(channelRef.current as any); } catch { }
@@ -84,12 +78,10 @@ export default function ReportScreen() {
         }, [fetchAll, subscribeRealtime, startPolling, stopPolling, online])
     );
 
-    // Onlayn holat o‘zgarsa pollingni boshqaramiz
     useEffect(() => {
         if (online) startPolling(); else stopPolling();
     }, [online, startPolling, stopPolling]);
 
-    // --- PDF eksport
     const fmt = (n: number) => Number(n || 0).toLocaleString("ru-RU");
     const buildHtml = () => {
         const dt = new Date().toLocaleString();

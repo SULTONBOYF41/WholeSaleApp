@@ -10,16 +10,13 @@ import { FlatList, Modal, Pressable, Text, TextInput, TouchableOpacity, View } f
 type Tab = "sales" | "returns";
 type EditRow = { id: string; name: string; qty: string; price: string };
 
-function monthOptions(lastN = 18) {
-    const now = new Date();
-    const arr: { label: string; value: string }[] = [];
-    for (let i = 0; i < lastN; i++) {
-        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-        const val = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-        const label = d.toLocaleString(undefined, { year: "numeric", month: "long" });
-        arr.push({ label, value: val });
-    }
-    return arr;
+function toYM(d: Date) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+function ymLabel(ym: string) {
+    const [y, m] = ym.split("-").map(Number);
+    const d = new Date(y, m - 1, 1);
+    return d.toLocaleString(undefined, { year: "numeric", month: "long" });
 }
 function inSameMonth(ts: number, ym: string) {
     const d = new Date(ts);
@@ -69,14 +66,32 @@ export default function History() {
     const toast = useToastStore();
 
     const [tab, setTab] = useState<Tab>("sales");
-    const monthOpts = useMemo(() => monthOptions(18), []);
-    const [month, setMonth] = useState(monthOpts[0]?.value);
+
+    /** Oylar: faqat ma’lumot bor oylar, va faqat oxirgi 4 oy */
+    const monthOpts = useMemo(() => {
+        const ymSet = new Set<string>();
+        for (const r of salesAll) ymSet.add(toYM(new Date(r.created_at)));
+        for (const r of returnsAll) ymSet.add(toYM(new Date(r.created_at)));
+        const list = Array.from(ymSet);
+        // YYYY-MM bo'yicha kamayish tartibida sort
+        list.sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
+        const last4 = list.slice(0, 4);
+        return last4.map((v) => ({ label: ymLabel(v), value: v }));
+    }, [salesAll, returnsAll]);
+
+    const [month, setMonth] = useState<string>(monthOpts[0]?.value);
 
     type StoreTypeFilter = "all" | "branch" | "market";
     const [storeType, setStoreType] = useState<StoreTypeFilter>("all");
 
-    const filteredStores = useMemo(() => stores.filter((s) => (storeType === "all" ? true : s.type === storeType)), [stores, storeType]);
-    const storeOptions = useMemo(() => [{ label: "Барчасi", value: "all" }, ...filteredStores.map((s) => ({ label: s.name, value: s.id }))], [filteredStores]);
+    const filteredStores = useMemo(
+        () => stores.filter((s) => (storeType === "all" ? true : s.type === storeType)),
+        [stores, storeType]
+    );
+    const storeOptions = useMemo(
+        () => [{ label: "Барчасi", value: "all" }, ...filteredStores.map((s) => ({ label: s.name, value: s.id }))],
+        [filteredStores]
+    );
     const [storeId, setStoreId] = useState<string>("all");
 
     const salesFiltered = useMemo(() => {
@@ -110,11 +125,29 @@ export default function History() {
     const [openKey, setOpenKey] = useState<string | null>(null);
     const [editRows, setEditRows] = useState<EditRow[]>([]);
 
+    // Tasdiqlash modal holati
+    const [confirmVisible, setConfirmVisible] = useState(false);
+    const [confirmText, setConfirmText] = useState<string>("");
+    const [confirmAction, setConfirmAction] = useState<null | (() => Promise<void>)>(null);
+
+    const askConfirm = (text: string, action: () => Promise<void>) => {
+        setConfirmText(text);
+        setConfirmAction(() => action);
+        setConfirmVisible(true);
+    };
+    const runConfirm = async () => {
+        if (confirmAction) await confirmAction();
+        setConfirmVisible(false);
+        setConfirmAction(null);
+        setConfirmText("");
+    };
+
     const openGroupEdit = (type: Tab, key: string) => {
         setEditType(type);
         setOpenKey(key);
         const g = type === "sales" ? saleGroups.find((x) => x.key === key) : returnGroups.find((x) => x.key === key);
-        const rows: EditRow[] = g?.items.map((x) => ({ id: x.id, name: x.productName, qty: String(x.qty), price: String(x.price) })) ?? [];
+        const rows: EditRow[] =
+            g?.items.map((x) => ({ id: x.id, name: x.productName, qty: String(x.qty), price: String(x.price) })) ?? [];
         setEditRows(rows);
     };
 
@@ -128,34 +161,29 @@ export default function History() {
             else if (editType === "returns") await updateReturn(r.id, { qty, price });
         }
         if (online) {
-            try {
-                await pushNow();
-            } catch { }
-            try {
-                await pullNow();
-            } catch { }
+            try { await pushNow(); } catch { }
+            try { await pullNow(); } catch { }
         }
         setOpenKey(null);
         setEditType(null);
     };
 
-    const removeRowFromGroup = async (rowId: string) => {
+    const _removeRowFromGroup = async (rowId: string) => {
         if (online) toast.showLoading("Saqlanmoqda…");
         else toast.showLoading("Offline: navbatga yozildi");
         if (editType === "sales") await removeSale(rowId);
         else if (editType === "returns") await removeReturn(rowId);
         setEditRows((rows) => rows.filter((r) => r.id !== rowId));
         if (online) {
-            try {
-                await pushNow();
-            } catch { }
-            try {
-                await pullNow();
-            } catch { }
+            try { await pushNow(); } catch { }
+            try { await pullNow(); } catch { }
         }
     };
+    const removeRowFromGroup = async (rowId: string) => {
+        askConfirm("Haqiqatan ham ushbu qatorni o‘chirmoqchimisiz?", () => _removeRowFromGroup(rowId));
+    };
 
-    const removeWholeGroup = async (type: Tab, key: string) => {
+    const _removeWholeGroup = async (type: Tab, key: string) => {
         if (online) toast.showLoading("Saqlanmoqda…");
         else toast.showLoading("Offline: navbatga yozildi");
         const g = type === "sales" ? saleGroups.find((x) => x.key === key) : returnGroups.find((x) => x.key === key);
@@ -165,13 +193,12 @@ export default function History() {
             else await removeReturn(row.id);
         }
         if (online) {
-            try {
-                await pushNow();
-            } catch { }
-            try {
-                await pullNow();
-            } catch { }
+            try { await pushNow(); } catch { }
+            try { await pullNow(); } catch { }
         }
+    };
+    const removeWholeGroup = async (type: Tab, key: string) => {
+        askConfirm("Haqiqatan ham butun paketni o‘chirmoqchimisiz?", () => _removeWholeGroup(type, key));
     };
 
     const money = (n: number) => (n || 0).toLocaleString() + " so‘m";
@@ -331,6 +358,7 @@ export default function History() {
                     />
                 )}
 
+                {/* Edit modal (mavjud) */}
                 <Modal
                     visible={!!openKey}
                     transparent
@@ -398,6 +426,23 @@ export default function History() {
                             <View style={{ flexDirection: "row", gap: 10, marginTop: 12, justifyContent: "flex-end" }}>
                                 <Button title="Бекор" tone="neutral" onPress={() => { setOpenKey(null); setEditType(null); }} style={{ minWidth: 120 }} />
                                 <Button title="Сақлаш" onPress={saveGroup} style={{ minWidth: 120 }} />
+                            </View>
+                        </Card>
+                    </Pressable>
+                </Modal>
+
+                {/* Tasdiqlash modal (yangi) */}
+                <Modal visible={confirmVisible} transparent animationType="fade" onRequestClose={() => setConfirmVisible(false)}>
+                    <Pressable
+                        onPress={() => setConfirmVisible(false)}
+                        style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.25)", justifyContent: "center", padding: 24 }}
+                    >
+                        <Card style={{ padding: 16 }}>
+                            <H2>Tasdiqlash</H2>
+                            <Text style={{ marginTop: 8, color: C.text }}>{confirmText}</Text>
+                            <View style={{ flexDirection: "row", gap: 10, marginTop: 12, justifyContent: "flex-end" }}>
+                                <Button title="Yo‘q" tone="neutral" onPress={() => setConfirmVisible(false)} style={{ minWidth: 120 }} />
+                                <Button title="Ha" onPress={runConfirm} style={{ minWidth: 120 }} />
                             </View>
                         </Card>
                     </Pressable>

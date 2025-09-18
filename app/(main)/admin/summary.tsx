@@ -7,10 +7,9 @@ import { useExpensesStore } from "@/store/expensesStore";
 import * as Linking from "expo-linking";
 import { useRouter } from "expo-router";
 import * as Sharing from "expo-sharing";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ScrollView, Text, TouchableOpacity, View } from "react-native";
 
-/** Oylar ro'yxati (scroll Select uchun) */
 function monthOptions(lastN = 24) {
     const now = new Date();
     const arr: { label: string; value: string }[] = [];
@@ -40,56 +39,131 @@ type MSSRow = {
 export default function SummaryScreen() {
     const router = useRouter();
 
-    // UI ma'lumotlari
+    // Global stores
     const stores = useAppStore((s) => s.stores);
-    const expenses = useExpensesStore((s) => s.items); // global xarajatlar
+    const { items: expenses, fetchAll: fetchExpenses } = useExpensesStore();
 
-    // Oy tanlash
+    // Oy tanlov
     const monthOpts = useMemo(() => monthOptions(24), []);
     const [month, setMonth] = useState(monthOpts[0]?.value);
 
-    // Serverdan monthly_store_summary o‘qish
+    // Serverdan MSS
     const [mss, setMss] = useState<MSSRow[]>([]);
     const [loadingServer, setLoadingServer] = useState(false);
 
-    useEffect(() => {
-        let mounted = true;
-        (async () => {
-            setLoadingServer(true);
-            try {
-                let { data, error } = await supabase
+    // Realtime channel refs
+    const chExpensesRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+    const chMssRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+
+    // MSS fetcher (bitta joyda)
+    const fetchMssForMonth = useCallback(async (ym: string) => {
+        setLoadingServer(true);
+        try {
+            let { data, error } = await supabase
+                .from("monthly_store_summary")
+                .select("*")
+                .eq("ym", ym);
+
+            // Agar bu oy uchun yozuv yo'q bo'lsa — serverda qayta hisoblatamiz
+            if (!error && (data?.length ?? 0) === 0) {
+                await supabase.rpc("recompute_monthly_summary", { _ym: ym });
+                const second = await supabase
                     .from("monthly_store_summary")
                     .select("*")
-                    .eq("ym", month);
-
-                if (!error && (data?.length ?? 0) === 0) {
-                    await supabase.rpc("recompute_monthly_summary", { _ym: month });
-                    const second = await supabase
-                        .from("monthly_store_summary")
-                        .select("*")
-                        .eq("ym", month);
-                    data = second.data ?? [];
-                }
-
-                if (!mounted) return;
-                setMss((data ?? []) as MSSRow[]);
-            } finally {
-                if (mounted) setLoadingServer(false);
+                    .eq("ym", ym);
+                data = second.data ?? [];
             }
-        })();
-        return () => {
-            mounted = false;
-        };
-    }, [month]);
+            setMss((data ?? []) as MSSRow[]);
+        } finally {
+            setLoadingServer(false);
+        }
+    }, []);
 
-    // Har do‘kon uchun qatordagi ko‘rsatkichlar (serverdan)
+    // Boshlang'ich yuklash + oy o'zgarsa qayta
+    useEffect(() => {
+        fetchMssForMonth(month);
+        // local expenses ham aktual bo'lsin
+        fetchExpenses();
+    }, [month, fetchMssForMonth, fetchExpenses]);
+
+    // Realtime: EXPENSES → local expenses’ni yangilash (oy bo‘yicha filtrlash)
+    useEffect(() => {
+        // eski kanallarni yopamiz
+        if (chExpensesRef.current) {
+            try { supabase.removeChannel(chExpensesRef.current as any); } catch { }
+            chExpensesRef.current = null;
+        }
+
+        const ch = supabase
+            .channel(`expenses-realtime-summary-${month}`)
+            .on(
+                "postgres_changes",
+                { event: "*", schema: "public", table: "expenses" },
+                (payload) => {
+                    // Faqat tanlangan oyga tegishlisi bo‘lsa, local expenses’ni yangilaymiz
+                    const nextYm =
+                        (payload.new && (payload.new as any).ym) ||
+                        (payload.old && (payload.old as any).ym);
+                    if (!nextYm || nextYm === month) {
+                        fetchExpenses(); // bu rows’ni clientda yangilaydi → netProfit ham yangilanadi
+                    }
+                }
+            )
+            .subscribe();
+
+        chExpensesRef.current = ch;
+
+        return () => {
+            if (chExpensesRef.current) {
+                try { supabase.removeChannel(chExpensesRef.current as any); } catch { }
+                chExpensesRef.current = null;
+            }
+        };
+    }, [month, fetchExpenses]);
+
+    // Realtime: MONTHLY_STORE_SUMMARY → jadvalni qayta yuklash
+    useEffect(() => {
+        if (chMssRef.current) {
+            try { supabase.removeChannel(chMssRef.current as any); } catch { }
+            chMssRef.current = null;
+        }
+
+        // Supabase v2 postgres_changes filter’da column filter qo‘llab-quvvatlanadi
+        const ch = supabase
+            .channel(`mss-realtime-${month}`)
+            .on(
+                "postgres_changes",
+                {
+                    event: "*",
+                    schema: "public",
+                    table: "monthly_store_summary",
+                    filter: `ym=eq.${month}`,
+                },
+                () => {
+                    // Serverdagi aggregated jadval o'zgarsa qayta o'qiymiz
+                    fetchMssForMonth(month);
+                }
+            )
+            .subscribe();
+
+        chMssRef.current = ch;
+
+        return () => {
+            if (chMssRef.current) {
+                try { supabase.removeChannel(chMssRef.current as any); } catch { }
+                chMssRef.current = null;
+            }
+        };
+    }, [month, fetchMssForMonth]);
+
+    // rows (server)
     type Row = {
         storeId: string;
         storeName: string;
         totalSales: number;
         totalReturns: number;
-        totalCash: number; // Tushum
-        debt: number; // (server hisoblagani)
+        totalCash: number;
+        debt: number;
     };
 
     const rows: Row[] = useMemo(() => {
@@ -106,7 +180,7 @@ export default function SummaryScreen() {
             .sort((a, b) => a.storeName.localeCompare(b.storeName));
     }, [mss, stores]);
 
-    // Global xarajatlar (oy kesimida, store’ga bog‘lanmagan)
+    // Global expenses (clientdan)
     const sumExpensesMonth = useMemo(() => {
         let s = 0;
         for (const e of expenses) {
@@ -116,7 +190,7 @@ export default function SummaryScreen() {
         return s;
     }, [expenses, month]);
 
-    // Jami satrlar (serverdan kelgan yig‘indi) + sof foyda
+    // Totals + net profit
     const totals = useMemo(() => {
         const t = { sales: 0, returns: 0, cash: 0, debt: 0 };
         for (const r of rows) {
@@ -125,15 +199,14 @@ export default function SummaryScreen() {
             t.cash += r.totalCash;
             t.debt += r.debt;
         }
-        const netProfit = (t.sales - t.returns) - sumExpensesMonth; // xarajat global
+        const netProfit = (t.sales - t.returns) - sumExpensesMonth;
         return { ...t, expenses: sumExpensesMonth, netProfit };
     }, [rows, sumExpensesMonth]);
 
-    // Sof foyda rangi (ijobiy: yashil, manfiy: qizil, 0: neytral)
     const netProfitColor =
         totals.netProfit > 0 ? "#10B981" : totals.netProfit < 0 ? "#EF4444" : C.text;
 
-    // PDF holati
+    // PDF
     const [creatingPdf, setCreatingPdf] = useState(false);
     const [pdfUri, setPdfUri] = useState<string | null>(null);
     const [pdfName, setPdfName] = useState<string>(() => `Umumiy_${month}.pdf`);
@@ -204,7 +277,6 @@ export default function SummaryScreen() {
             <H2 style={{ marginTop: 12 }}>Oy tanlang</H2>
             <Select value={month} onChange={setMonth} options={monthOpts} style={{ marginTop: 6 }} />
 
-            {/* Jadval — horizontal scroll bilan */}
             <Card style={{ marginTop: 12, padding: 0 }}>
                 <ScrollView horizontal showsHorizontalScrollIndicator contentContainerStyle={{ minWidth: 760 }}>
                     <View style={{ width: "100%" }}>
@@ -232,7 +304,6 @@ export default function SummaryScreen() {
                             ))
                         )}
 
-                        {/* Jami (server summalari) */}
                         <View style={{ flexDirection: "row", borderTopWidth: 2, borderColor: "#EAB308", backgroundColor: "#FEF3C7" }}>
                             <Cell label="Jami" bold flex />
                             <Cell label={fmt(totals.sales)} right bold width={140} />
@@ -244,7 +315,6 @@ export default function SummaryScreen() {
                 </ScrollView>
             </Card>
 
-            {/* Global xarajat va sof foyda ko‘rsatkichlari */}
             <View style={{ flexDirection: "row", gap: 12, marginTop: 12 }}>
                 <Card style={{ flex: 1 }}>
                     <Text style={{ color: C.muted, fontWeight: "800" }}>Umumiy xarajat</Text>
@@ -253,19 +323,13 @@ export default function SummaryScreen() {
                 <Card style={{ flex: 1 }}>
                     <Text style={{ color: C.muted, fontWeight: "800" }}>Sof foyda</Text>
                     <Text
-                        style={{
-                            fontSize: 18,
-                            fontWeight: "900",
-                            marginTop: 6,
-                            color: netProfitColor, // << ijobiy/yomon rang
-                        }}
+                        style={{ fontSize: 18, fontWeight: "900", marginTop: 6, color: netProfitColor }}
                     >
                         {fmt(totals.netProfit)} so‘m
                     </Text>
                 </Card>
             </View>
 
-            {/* PDF natijasi: link + tugmalar (2 ta) + bekor qilish */}
             {pdfUri && (
                 <Card style={{ marginTop: 12 }}>
                     <Text style={{ fontWeight: "900" }}>{pdfName}</Text>
@@ -282,9 +346,7 @@ export default function SummaryScreen() {
 
                     <Button
                         title="Bekor qilish"
-                        onPress={() => {
-                            setPdfUri(null);
-                        }}
+                        onPress={() => { setPdfUri(null); }}
                         tone="neutral"
                         style={{ marginTop: 10 }}
                     />
@@ -294,7 +356,6 @@ export default function SummaryScreen() {
     );
 }
 
-/** Kichik yordamchi: jadval katak */
 function Cell({
     label,
     bold,
