@@ -47,6 +47,8 @@ export type MonthlySummary = {
     total_sales: number;
     total_returns: number;
     total_cash: number;
+    delta?: number;             // ixtiyoriy: oy ichidagi o'zgarish
+    debt_raw: number;           // +/- bo'ladi (carryover)
     debt: number;
     computed_at: string; // ISO string
 };

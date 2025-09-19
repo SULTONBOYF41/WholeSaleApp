@@ -65,6 +65,7 @@ export default function Dashboard() {
     const localTotalCash = useMemo(() => receipts.reduce((a, r) => a + r.amount, 0), [receipts]);
     const localDebt = Math.max(localTotalSales - localTotalReturns - localTotalCash, 0);
 
+
     // Vazvrat (miqdor)
     const returnsQty = useMemo(() => returns.reduce((a, r) => a + r.qty, 0), [returns]);
 
@@ -101,7 +102,7 @@ export default function Dashboard() {
         try {
             const { data, error } = await supabase
                 .from("monthly_store_summary")
-                .select("store_id,ym,total_sales,total_returns,total_cash,debt")
+                .select("store_id, ym, total_sales, total_returns, total_cash, delta, debt_raw, debt")
                 .eq("ym", month)
                 .eq("store_id", id)
                 .maybeSingle();
@@ -228,7 +229,7 @@ export default function Dashboard() {
     const viewTotalSales = msRow?.total_sales ?? localTotalSales;
     const viewTotalReturns = msRow?.total_returns ?? localTotalReturns;
     const viewTotalCash = msRow?.total_cash ?? localTotalCash;
-    const viewDebt = msRow?.debt ?? localDebt;
+    const viewDebt = msRow?.debt_raw ?? localDebt; // +/- ko'rinish
 
     return (
         <>
