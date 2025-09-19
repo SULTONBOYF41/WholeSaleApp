@@ -7,7 +7,7 @@ export type ExpenseTotals = {
     family?: number | null;
     shop?: number | null;
     bank?: number | null;
-    total?: number | null; // agar yuborilmasa, family+shop+bank yig'indisini ko'rsatamiz
+    total?: number | null; // yuborilmasa, family+shop+bank yig'indisi
 };
 
 type Props = {
@@ -18,7 +18,6 @@ type Props = {
 };
 
 const PRIMARY = "#770E13";
-
 const fmt = (n?: number | null) => {
     const v = Number(n ?? 0);
     return v.toLocaleString?.("ru-RU") ?? String(v);
@@ -35,8 +34,7 @@ const PressableCard: React.FC<{
     const onIn = () => Animated.spring(scale, { toValue: 0.98, useNativeDriver: true }).start();
     const onOut = () => Animated.spring(scale, { toValue: 1, useNativeDriver: true }).start();
 
-    const color =
-        tone === "red" ? PRIMARY : tone === "green" ? "#047857" : tone === "blue" ? "#0E7490" : "#374151";
+    const color = tone === "red" ? PRIMARY : tone === "green" ? "#047857" : tone === "blue" ? "#0E7490" : "#374151";
 
     return (
         <Animated.View style={{ transform: [{ scale }] }}>
@@ -45,10 +43,7 @@ const PressableCard: React.FC<{
                 onPressIn={onIn}
                 onPressOut={onOut}
                 disabled={disabled}
-                style={({ pressed }) => [
-                    styles.card,
-                    { borderColor: pressed ? "#eee" : "#f0f0f0", backgroundColor: "#fff" },
-                ]}
+                style={({ pressed }) => [styles.card, { borderColor: pressed ? "#eee" : "#f0f0f0", backgroundColor: "#fff" }]}
             >
                 <Text style={[styles.title, { color }]}>{title}</Text>
                 <Text style={styles.value}>{fmt(value)} сўм</Text>
@@ -57,12 +52,7 @@ const PressableCard: React.FC<{
     );
 };
 
-export const ReportCards = memo(function ReportCards({
-    totals,
-    onGoFamily,
-    onGoShop,
-    onGoBank,
-}: Props) {
+export const ReportCards = memo(function ReportCards({ totals, onGoFamily, onGoShop, onGoBank }: Props) {
     const family = Number(totals.family ?? 0);
     const shop = Number(totals.shop ?? 0);
     const bank = Number(totals.bank ?? 0);
@@ -70,13 +60,9 @@ export const ReportCards = memo(function ReportCards({
 
     return (
         <View style={styles.wrap}>
-            {/* Oilaviy */}
             <PressableCard title="Oilaviy" value={family} tone="red" onPress={onGoFamily} />
-            {/* Do'kon */}
             <PressableCard title="Do'kon" value={shop} tone="blue" onPress={onGoShop} />
-            {/* Bank */}
             <PressableCard title="Bank" value={bank} tone="green" onPress={onGoBank} />
-            {/* Umumiy */}
             <Card style={styles.totalCard}>
                 <Text style={[styles.title, { color: "#111827" }]}>Жами</Text>
                 <Text style={[styles.value, { color: "#111827" }]}>{fmt(total)} сўм</Text>
@@ -86,31 +72,13 @@ export const ReportCards = memo(function ReportCards({
 });
 
 const styles = StyleSheet.create({
-    // 👉 column tartib, butun eni
-    wrap: {
-        padding: 16,
-        paddingTop: 12,
-        flexDirection: "column",
-        gap: 12,
-    },
+    wrap: { padding: 16, paddingTop: 12, flexDirection: "column", gap: 12 },
     card: {
-        width: "100%",
-        borderRadius: 14,
-        borderWidth: 1,
-        padding: 14,
-        shadowColor: "#000",
-        shadowOpacity: 0.06,
-        shadowRadius: 6,
-        shadowOffset: { width: 0, height: 3 },
-        elevation: 2,
+        width: "100%", borderRadius: 14, borderWidth: 1, padding: 14,
+        shadowColor: "#000", shadowOpacity: 0.06, shadowRadius: 6, shadowOffset: { width: 0, height: 3 }, elevation: 2,
     },
     totalCard: {
-        width: "100%",
-        borderRadius: 14,
-        padding: 14,
-        borderWidth: 1,
-        borderColor: "#eaeaea",
-        backgroundColor: "#fafafa",
+        width: "100%", borderRadius: 14, padding: 14, borderWidth: 1, borderColor: "#eaeaea", backgroundColor: "#fafafa",
     },
     title: { fontSize: 13, fontWeight: "800", marginBottom: 6 },
     value: { fontSize: 18, fontWeight: "900", color: C.text },

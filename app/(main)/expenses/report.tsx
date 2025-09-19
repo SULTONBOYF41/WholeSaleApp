@@ -1,13 +1,12 @@
 // app/(main)/expenses/report.tsx
 import { ReportCards } from "@/components/expenses/ReportCards";
 import { Button, H2 } from "@/components/UI";
-import { supabase } from "@/lib/supabase";
 import { useExpensesStore } from "@/store/expensesStore";
 import { useSyncStore } from "@/store/syncStore";
 import * as Print from "expo-print";
 import { router, useFocusEffect } from "expo-router";
 import * as Sharing from "expo-sharing";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { RefreshControl, ScrollView, View } from "react-native";
 
 const PRIMARY = "#770E13";
@@ -15,72 +14,26 @@ const PRIMARY = "#770E13";
 export default function ReportScreen() {
     const { fetchAll, loading, totals } = useExpensesStore();
     const online = useSyncStore((s) => s.online);
-
     const [exporting, setExporting] = useState(false);
-    const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-    const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+
+    useFocusEffect(
+        useCallback(() => {
+            if (online) fetchAll().catch(() => { });
+        }, [online, fetchAll])
+    );
 
     const safeTotals = useMemo(() => {
         const tObj: Partial<{ family: number; shop: number; bank: number; total: number }> = totals ?? {};
         const f = Number(tObj.family ?? 0);
         const s = Number(tObj.shop ?? 0);
         const b = Number(tObj.bank ?? 0);
-        const t = Number(tObj.total ?? f + s + b);
+        const t = Number((tObj as any).total ?? f + s + b);
         return { family: f, shop: s, bank: b, total: t };
     }, [totals]);
 
     const onGoFamily = () => router.replace("/(main)/expenses/family");
     const onGoShop = () => router.replace("/(main)/expenses/shop");
     const onGoBank = () => router.replace("/(main)/expenses/bank");
-
-    // Realtime: expenses jadvali o'zgarsa, qayta yuklaymiz
-    const subscribeRealtime = useCallback(() => {
-        if (channelRef.current) {
-            try { supabase.removeChannel(channelRef.current as any); } catch { }
-            channelRef.current = null;
-        }
-
-        const ch = supabase
-            .channel("expenses-realtime-report")
-            .on(
-                "postgres_changes",
-                { event: "*", schema: "public", table: "expenses" },
-                () => { fetchAll(); }
-            )
-            .subscribe();
-
-        channelRef.current = ch;
-    }, [fetchAll]);
-
-    // 8s polling (faqat onlaynda)
-    const startPolling = useCallback(() => {
-        if (pollRef.current) return;
-        pollRef.current = setInterval(() => { fetchAll(); }, 8000);
-    }, [fetchAll]);
-
-    const stopPolling = useCallback(() => {
-        if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
-    }, []);
-
-    useFocusEffect(
-        useCallback(() => {
-            fetchAll();
-            subscribeRealtime();
-            if (online) startPolling();
-
-            return () => {
-                stopPolling();
-                if (channelRef.current) {
-                    try { supabase.removeChannel(channelRef.current as any); } catch { }
-                    channelRef.current = null;
-                }
-            };
-        }, [fetchAll, subscribeRealtime, startPolling, stopPolling, online])
-    );
-
-    useEffect(() => {
-        if (online) startPolling(); else stopPolling();
-    }, [online, startPolling, stopPolling]);
 
     const fmt = (n: number) => Number(n || 0).toLocaleString("ru-RU");
     const buildHtml = () => {
@@ -115,45 +68,35 @@ h1{margin:0 0 8px;font-size:22px}
             const html = buildHtml();
             const { uri } = await Print.printToFileAsync({ html });
             if (await Sharing.isAvailableAsync()) {
-                await Sharing.shareAsync(uri, {
-                    mimeType: "application/pdf",
-                    dialogTitle: "Xarajatlar hisobot (PDF)",
-                });
+                await Sharing.shareAsync(uri, { mimeType: "application/pdf", dialogTitle: "Xarajatlar hisobot (PDF)" });
             }
         } finally {
             setExporting(false);
         }
     };
 
+    const onRefresh = useCallback(() => {
+        if (!online) return;
+        fetchAll().catch(() => { });
+    }, [online, fetchAll]);
+
     return (
         <ScrollView
-            refreshControl={<RefreshControl refreshing={loading} onRefresh={fetchAll} />}
+            refreshControl={<RefreshControl refreshing={loading} onRefresh={onRefresh} />}
             contentContainerStyle={{ paddingBottom: 16 }}
         >
-            <View
-                style={{
-                    paddingHorizontal: 16,
-                    paddingTop: 12,
-                    flexDirection: "row",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                }}
-            >
+            <View style={{ paddingHorizontal: 16, paddingTop: 12, flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
                 <H2>Xarajatlar — Hisobot</H2>
-                <Button
-                    title={exporting ? "PDF tayyorlanmoqda..." : "PDF yuklash"}
-                    onPress={exportPdf}
-                    style={{ backgroundColor: PRIMARY }}
-                    disabled={exporting}
-                />
+                <Button title={exporting ? "PDF tayyorlanmoqda..." : "PDF yuklash"} onPress={exportPdf} style={{ backgroundColor: PRIMARY }} disabled={exporting} />
             </View>
 
-            <ReportCards
-                totals={safeTotals}
-                onGoFamily={onGoFamily}
-                onGoShop={onGoShop}
-                onGoBank={onGoBank}
-            />
+            <ReportCards totals={safeTotals} onGoFamily={onGoFamily} onGoShop={onGoShop} onGoBank={onGoBank} />
+
+            {!online && (
+                <View style={{ marginHorizontal: 16, marginTop: 8, padding: 10, borderRadius: 10, borderWidth: 1, borderColor: "#FCD34D", backgroundColor: "#FEF3C7" }}>
+                    <H2 style={{ fontSize: 14 }}>Offline rejim — tarmoqqa ulanganingizda yangilanadi</H2>
+                </View>
+            )}
         </ScrollView>
     );
 }

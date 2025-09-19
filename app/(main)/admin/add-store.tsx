@@ -11,13 +11,21 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Modal, SectionList, Text, TextInput, TouchableOpacity, View } from "react-native";
 
 const PRIMARY = "#770E13";
-const DELETE_PIN = "2112"; // 4 xonali PIN (hard-coded)
+const DELETE_PIN = "2112";
+
+// RFC4122 v4 (soddalashtirilgan)
+function uuidv4() {
+    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+        const r = (Math.random() * 16) | 0;
+        const v = c === "x" ? r : (r & 0x3) | 0x8;
+        return v.toString(16);
+    });
+}
 
 export default function AddStore() {
     const categories = useAppStore((s) => s.categories);
     const stores = useAppStore((s) => s.stores);
 
-    // Lokal/queue CRUD (offline fall-back uchun)
     const upsertStoreLocal = useAppStore((s) => s.upsertStore);
     const removeStoreLocal = useAppStore((s) => s.removeStore);
 
@@ -29,7 +37,8 @@ export default function AddStore() {
     const [prices, setPrices] = useState<Record<string, string>>({});
     const [editing, setEditing] = useState<Store | null>(null);
 
-    // Delete PIN modal state
+    const submittingRef = useRef(false);
+
     const [pinVisible, setPinVisible] = useState(false);
     const [pinText, setPinText] = useState("");
     const [pinStoreId, setPinStoreId] = useState<string | null>(null);
@@ -37,7 +46,6 @@ export default function AddStore() {
 
     const branches = stores.filter((s) => s.type === "branch");
     const markets = stores.filter((s) => s.type === "market");
-
     const sections = useMemo(
         () => [
             { title: "Филиаллар", data: branches },
@@ -55,41 +63,78 @@ export default function AddStore() {
         setEditing(null);
     };
 
-    // ONLAYN HOLAT: RPC bilan saqlash (insert/update), OFFLINE: lokal queue
-    const submit = async () => {
-        if (!name.trim()) return;
-
-        // string -> number map
-        const pp: Record<string, number> = {};
+    const normalizePrices = (): Record<string, number> => {
+        const out: Record<string, number> = {};
         for (const [k, v] of Object.entries(prices)) {
-            if (v !== "" && v != null && !Number.isNaN(Number(v))) pp[k] = Number(v);
+            const n = Number(v);
+            if (Number.isFinite(n) && v !== "") out[k] = n;
         }
+        return out;
+    };
+
+    const submit = async () => {
+        if (submittingRef.current) return;
+        if (!name.trim()) {
+            toast.show("Nomi bo‘sh bo‘lmasin");
+            return;
+        }
+        submittingRef.current = true;
+
+        const payload = {
+            name: name.trim(),
+            type,
+            prices: normalizePrices(),
+        };
 
         if (online) {
             toast.showLoading(editing ? "Yangilanmoqda…" : "Saqlanmoqda…");
             try {
-                const { data, error } = await supabase.rpc("save_store", {
-                    _id: editing?.id ?? null,
-                    _name: name.trim(),
-                    _type: type,
-                    _prices: pp as any,
-                });
-                if (error) throw error;
+                if (editing?.id) {
+                    // UPDATE: upsert bilan
+                    const { error } = await supabase
+                        .from("stores")
+                        .upsert({ id: editing.id, ...payload }, { onConflict: "id" });
+                    if (error) throw error;
+                } else {
+                    // INSERT: barqarorlik uchun id berib yuboramiz (ixtiyoriy)
+                    const newId = uuidv4();
+                    const { error } = await supabase.from("stores").insert({ id: newId, ...payload });
+                    if (error) throw error;
+                }
 
-                await useAppStore.getState().pullNow(); // ro'yxatni yangilash
+                // PUSH bo'ldi -> PULL
+                await useAppStore.getState().pullNow();
                 resetForm();
                 toast.hide();
                 toast.show(editing ? "Tahrir saqlandi" : "Do‘kon qo‘shildi");
-            } catch (e) {
+            } catch (e: any) {
                 toast.hide();
-                toast.show("Saqlashda xato");
+                const msg = e?.message?.includes("Network request failed")
+                    ? "Tarmoq yo‘q. Offline sinab ko‘ring."
+                    : e?.message ?? "Saqlashda xato";
+                toast.show(msg);
+            } finally {
+                submittingRef.current = false;
             }
         } else {
-            // offline: lokal queue
+            // OFFLINE → lokal queue (sizdagi local handler nomi bilan)
             toast.showLoading("Offline: navbatga yozildi");
-            await upsertStoreLocal({ id: editing?.id, name: name.trim(), type, prices: pp });
-            resetForm();
-            toast.hide();
+            try {
+                const isEditing = Boolean(editing?.id);
+                const localId = editing?.id ?? uuidv4();
+                await upsertStoreLocal({
+                    id: localId,
+                    name: payload.name,
+                    type: payload.type,
+                    prices: payload.prices,
+                    // updated_at NI YUBORMAYMIZ (TS xatosi bo'lsa ham, DBda default/trigger bor)
+                });
+                resetForm();
+                toast.hide();
+                toast.show(isEditing ? "Tahrir navbatga yozildi (offline)" : "Qo‘shish navbatga yozildi (offline)");
+            } finally {
+                submittingRef.current = false;
+            }
         }
     };
 
@@ -102,7 +147,6 @@ export default function AddStore() {
         setPrices(p);
     };
 
-    // Delete bosilganda – PIN modal ochamiz
     const confirmRemove = (id: string) => {
         setPinStoreId(id);
         setPinText("");
@@ -110,7 +154,6 @@ export default function AddStore() {
         setPinVisible(true);
     };
 
-    // PIN tekshirib, o‘chirish
     const doRemoveNow = async () => {
         if (!pinStoreId) return;
         if (pinText !== DELETE_PIN) {
@@ -122,21 +165,29 @@ export default function AddStore() {
         if (online) {
             toast.show("O‘chirilmoqda…");
             try {
-                // Jadvalingizda sales/returns/cash_receipts -> stores ON DELETE CASCADE bor.
-                const { error } = await supabase.from("stores").delete().eq("id", pinStoreId);
-                if (error) throw error;
+                const { data: rpcOk, error: rpcErr } = await supabase.rpc("delete_store_cascade", { _id: pinStoreId });
+                if (rpcErr && !rpcErr.message?.toLowerCase?.().includes("function")) throw rpcErr;
+                if ((rpcErr && rpcErr.message?.toLowerCase?.().includes("function")) || rpcOk === false) {
+                    const { error } = await supabase.from("stores").delete().eq("id", pinStoreId);
+                    if (error) throw error;
+                }
 
                 await useAppStore.getState().pullNow();
                 toast.show("O‘chirildi");
-            } catch {
-                toast.show("O‘chirishda xato");
+            } catch (e: any) {
+                const msg =
+                    e?.message?.includes("foreign key") || e?.code === "23503"
+                        ? "O‘chirish mumkin emas: bog‘liq ma’lumotlar bor."
+                        : e?.message?.includes("Network request failed")
+                            ? "Tarmoq yo‘q. Offline o‘chirishga yozildi."
+                            : e?.message || "O‘chirishda xato";
+                toast.show(msg);
             } finally {
                 setPinVisible(false);
                 setPinStoreId(null);
                 setPinText("");
             }
         } else {
-            // offline: lokal queue
             toast.show("Offline: navbatga yozildi");
             await removeStoreLocal(pinStoreId);
             setPinVisible(false);
@@ -145,40 +196,53 @@ export default function AddStore() {
         }
     };
 
-    // --- Realtime + polling (o‘zgartirmadik) ---
+    // --- Realtime + PUSH→PULL orkestratsiya (faqat online)
     const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const chRefStores = useRef<ReturnType<typeof supabase.channel> | null>(null);
+    const chRefProducts = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
     useEffect(() => {
-        useAppStore.getState().startPull().catch(() => { });
-        useAppStore.getState().pullNow().catch(() => { });
+        const pushAndPullNow = useSyncStore.getState().pushAndPullNow; // << YANGI nom
 
-        const chStores = supabase
-            .channel("rt-stores")
-            .on("postgres_changes", { event: "*", schema: "public", table: "stores" }, () =>
-                useAppStore.getState().pullNow().catch(() => { })
-            )
-            .subscribe();
+        if (online) {
+            // Avval lokal navbatni PUSH, keyin PULL
+            pushAndPullNow().catch(() => { });
 
-        const chProducts = supabase
-            .channel("rt-products-for-add-store")
-            .on("postgres_changes", { event: "*", schema: "public", table: "products" }, () =>
-                useAppStore.getState().pullNow().catch(() => { })
-            )
-            .subscribe();
+            // Realtime kanallar
+            if (chRefStores.current) { try { supabase.removeChannel(chRefStores.current as any); } catch { } chRefStores.current = null; }
+            if (chRefProducts.current) { try { supabase.removeChannel(chRefProducts.current as any); } catch { } chRefProducts.current = null; }
 
-        pollRef.current = setInterval(() => {
-            useAppStore.getState().pullNow().catch(() => { });
-        }, 15000);
+            chRefStores.current = supabase
+                .channel("rt-stores")
+                .on("postgres_changes", { event: "*", schema: "public", table: "stores" }, () =>
+                    useAppStore.getState().pullNow().catch(() => { })
+                )
+                .subscribe();
+
+            chRefProducts.current = supabase
+                .channel("rt-products-for-add-store")
+                .on("postgres_changes", { event: "*", schema: "public", table: "products" }, () =>
+                    useAppStore.getState().pullNow().catch(() => { })
+                )
+                .subscribe();
+
+            if (!pollRef.current) {
+                pollRef.current = setInterval(() => {
+                    useAppStore.getState().pullNow().catch(() => { });
+                }, 15000);
+            }
+        } else {
+            if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+            if (chRefStores.current) { try { supabase.removeChannel(chRefStores.current as any); } catch { } chRefStores.current = null; }
+            if (chRefProducts.current) { try { supabase.removeChannel(chRefProducts.current as any); } catch { } chRefProducts.current = null; }
+        }
 
         return () => {
-            if (pollRef.current !== null) {
-                clearInterval(pollRef.current);
-                pollRef.current = null;
-            }
-            supabase.removeChannel(chStores);
-            supabase.removeChannel(chProducts);
+            if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+            if (chRefStores.current) { try { supabase.removeChannel(chRefStores.current as any); } catch { } chRefStores.current = null; }
+            if (chRefProducts.current) { try { supabase.removeChannel(chRefProducts.current as any); } catch { } chRefProducts.current = null; }
         };
-    }, []);
+    }, [online]);
 
     const ListHeader = useMemo(
         () => (
@@ -239,13 +303,11 @@ export default function AddStore() {
                 renderItem={({ item }) => (
                     <Card style={{ marginTop: 8, padding: 12 }}>
                         <View style={{ flexDirection: "row", alignItems: "center" }}>
-                            {/* chap: nom + turi */}
                             <View style={{ flex: 1, paddingRight: 10 }}>
                                 <Text style={{ fontWeight: "800", color: C.text }}>{item.name}</Text>
                                 <Text style={{ color: C.muted }}>{item.type === "branch" ? "Филиал" : "Дўкон"}</Text>
                             </View>
 
-                            {/* o‘ng: ikon tugmalar (edit / delete) */}
                             <View style={{ flexDirection: "row", gap: 10 }}>
                                 <TouchableOpacity
                                     onPress={() => startEdit(item)}

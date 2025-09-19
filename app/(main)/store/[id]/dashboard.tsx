@@ -15,6 +15,7 @@ const P = "#770E13";
 export default function Dashboard() {
     const router = useRouter();
     const { id } = useLocalSearchParams<{ id: string }>();
+
     const allSales = useAppStore((s) => s.sales);
     const allReturns = useAppStore((s) => s.returns);
     const cash = useAppStore((s) => s.cashReceipts);
@@ -39,8 +40,8 @@ export default function Dashboard() {
     const [msLoading, setMsLoading] = useState(false);
 
     // Lokal filter faqat rank/backup uchun
-    const inMonth = (t: number) => {
-        const d = new Date(t);
+    const inMonth = (t: number | string | Date) => {
+        const d = new Date(t as any);
         const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
         return key === month;
     };
@@ -64,7 +65,7 @@ export default function Dashboard() {
     const localTotalCash = useMemo(() => receipts.reduce((a, r) => a + r.amount, 0), [receipts]);
     const localDebt = Math.max(localTotalSales - localTotalReturns - localTotalCash, 0);
 
-    // <<<<<< TUZATISH: “Vazvrat (miqdor)” — qty yig‘indisi
+    // Vazvrat (miqdor)
     const returnsQty = useMemo(() => returns.reduce((a, r) => a + r.qty, 0), [returns]);
 
     // Ranklar
@@ -100,7 +101,7 @@ export default function Dashboard() {
         try {
             const { data, error } = await supabase
                 .from("monthly_store_summary")
-                .select("*")
+                .select("store_id,ym,total_sales,total_returns,total_cash,debt")
                 .eq("ym", month)
                 .eq("store_id", id)
                 .maybeSingle();
@@ -112,29 +113,52 @@ export default function Dashboard() {
         }
     };
 
+    // Dastlabki yuklash va oy/id o'zgarsa yangilash
     useEffect(() => {
         fetchSummary();
     }, [id, month]);
 
-    // Realtime – o‘zgarishlarda qayta o‘qish
+    // Realtime: JADVALLAR (VIEW emas!) o'zgarsa -> summary qayta o'qilsin
     useEffect(() => {
         if (!id) return;
-        const channel = supabase
-            .channel(`mss:${id}:${month}`)
+
+        const onAnyChange = () => {
+            // xohlasa: lokal holat ham yangilasin
+            useAppStore.getState().pullNow().catch(() => { });
+            fetchSummary();
+        };
+
+        const chCash = supabase
+            .channel(`rt-cash:${id}`)
             .on(
                 "postgres_changes",
-                {
-                    event: "*",
-                    schema: "public",
-                    table: "monthly_store_summary",
-                    filter: `store_id=eq.${id},ym=eq.${month}`,
-                },
-                () => fetchSummary()
+                { event: "*", schema: "public", table: "cash_receipts", filter: `store_id=eq.${id}` },
+                onAnyChange
+            )
+            .subscribe();
+
+        const chSales = supabase
+            .channel(`rt-sales:${id}`)
+            .on(
+                "postgres_changes",
+                { event: "*", schema: "public", table: "sales", filter: `store_id=eq.${id}` },
+                onAnyChange
+            )
+            .subscribe();
+
+        const chReturns = supabase
+            .channel(`rt-returns:${id}`)
+            .on(
+                "postgres_changes",
+                { event: "*", schema: "public", table: "returns", filter: `store_id=eq.${id}` },
+                onAnyChange
             )
             .subscribe();
 
         return () => {
-            supabase.removeChannel(channel);
+            supabase.removeChannel(chCash);
+            supabase.removeChannel(chSales);
+            supabase.removeChannel(chReturns);
         };
     }, [id, month]);
 
@@ -146,7 +170,6 @@ export default function Dashboard() {
                 totalSales: msRow?.total_sales ?? localTotalSales,
                 totalCash: msRow?.total_cash ?? localTotalCash,
                 debt: msRow?.debt ?? localDebt,
-                // <<<<<< TUZATISH: qty yig‘indisi yuboramiz
                 returnCount: returnsQty,
             };
             const result = await exportDashboardPdf({
@@ -193,7 +216,6 @@ export default function Dashboard() {
         } catch { }
     };
 
-    // <<<<<< Yangi: alohida betda ochish (report-viewer)
     const openPdfInScreen = () => {
         if (!pdfLink) return;
         router.push({
@@ -226,12 +248,7 @@ export default function Dashboard() {
                     <View style={{ flex: 1 }} />
                     <TouchableOpacity
                         onPress={exportPdf}
-                        style={{
-                            backgroundColor: P,
-                            paddingVertical: 10,
-                            paddingHorizontal: 12,
-                            borderRadius: 10,
-                        }}
+                        style={{ backgroundColor: P, paddingVertical: 10, paddingHorizontal: 12, borderRadius: 10 }}
                     >
                         <Text style={{ color: "#fff", fontWeight: "800" }}>PDF</Text>
                     </TouchableOpacity>
@@ -261,10 +278,7 @@ export default function Dashboard() {
 
             {/* PDF MODAL */}
             <Modal visible={pdfModalOpen} transparent animationType="fade" onRequestClose={() => setPdfModalOpen(false)}>
-                <Pressable
-                    onPress={() => setPdfModalOpen(false)}
-                    style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.2)", justifyContent: "center", padding: 24 }}
-                >
+                <Pressable onPress={() => setPdfModalOpen(false)} style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.2)", justifyContent: "center", padding: 24 }}>
                     <View
                         style={{
                             backgroundColor: "#fff",
@@ -285,33 +299,18 @@ export default function Dashboard() {
                             Quyidagi havola — tanlagan davrdagi ({month}) “{storeName || "Do‘kon"}” uchun PDF hisobot.
                         </Text>
 
-                        <View
-                            style={{
-                                marginTop: 12,
-                                padding: 12,
-                                borderWidth: 1,
-                                borderColor: "#E9ECF1",
-                                borderRadius: 12,
-                                backgroundColor: "#F9FAFB",
-                            }}
-                        >
+                        <View style={{ marginTop: 12, padding: 12, borderWidth: 1, borderColor: "#E9ECF1", borderRadius: 12, backgroundColor: "#F9FAFB" }}>
                             <Text style={{ fontWeight: "800" }}>{pdfName}</Text>
 
                             <TouchableOpacity disabled={!pdfLink} onPress={openPdfExternal} activeOpacity={0.7}>
-                                <Text
-                                    style={{ color: pdfLink ? "#2563EB" : "#94A3B8", marginTop: 6, textDecorationLine: "underline" }}
-                                    numberOfLines={2}
-                                >
+                                <Text style={{ color: pdfLink ? "#2563EB" : "#94A3B8", marginTop: 6, textDecorationLine: "underline" }} numberOfLines={2}>
                                     {String(pdfLink ?? "Havola topilmadi")}
                                 </Text>
                             </TouchableOpacity>
                         </View>
 
                         <View style={{ flexDirection: "row", gap: 10, marginTop: 14, justifyContent: "flex-end" }}>
-                            <TouchableOpacity
-                                onPress={() => setPdfModalOpen(false)}
-                                style={{ paddingVertical: 12, paddingHorizontal: 16, borderRadius: 12, backgroundColor: "#F3F4F6" }}
-                            >
+                            <TouchableOpacity onPress={() => setPdfModalOpen(false)} style={{ paddingVertical: 12, paddingHorizontal: 16, borderRadius: 12, backgroundColor: "#F3F4F6" }}>
                                 <Text style={{ fontWeight: "800" }}>Yopish</Text>
                             </TouchableOpacity>
 
@@ -323,7 +322,6 @@ export default function Dashboard() {
                                 <Text style={{ fontWeight: "800", color: "#fff" }}>Ulashish</Text>
                             </TouchableOpacity>
 
-                            {/* <<<<<< Alohida betda ochish */}
                             <TouchableOpacity
                                 disabled={!pdfLink}
                                 onPress={openPdfInScreen}
@@ -344,15 +342,7 @@ export default function Dashboard() {
 /** --- Presentational components --- */
 function StatCard({ title, value }: { title: string; value: string }) {
     return (
-        <View
-            style={{
-                backgroundColor: "#fff",
-                borderWidth: 1,
-                borderColor: "#E9ECF1",
-                borderRadius: 16,
-                padding: 14,
-            }}
-        >
+        <View style={{ backgroundColor: "#fff", borderWidth: 1, borderColor: "#E9ECF1", borderRadius: 16, padding: 14 }}>
             <Text style={{ color: "#6B7280", fontWeight: "800" }}>{title}</Text>
             <Text style={{ fontSize: 20, fontWeight: "900", marginTop: 6 }}>{value}</Text>
         </View>
@@ -396,16 +386,7 @@ function RankTableReturns({ rows }: { rows: { name: string; qty: number }[] }) {
 }
 function Cell({ label, bold, right, width, flex }: { label: string; bold?: boolean; right?: boolean; width?: number; flex?: boolean }) {
     return (
-        <View
-            style={{
-                width,
-                flex: flex ? 1 : undefined,
-                borderRightWidth: 1,
-                borderColor: "#E9ECF1",
-                paddingVertical: 10,
-                paddingHorizontal: 10,
-            }}
-        >
+        <View style={{ width, flex: flex ? 1 : undefined, borderRightWidth: 1, borderColor: "#E9ECF1", paddingVertical: 10, paddingHorizontal: 10 }}>
             <Text style={{ fontWeight: bold ? "800" : "400", textAlign: right ? "right" : "left" }}>{label}</Text>
         </View>
     );

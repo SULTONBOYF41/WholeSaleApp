@@ -4,11 +4,13 @@ import { exportMonthlySummaryPdf } from "@/lib/pdf";
 import { supabase } from "@/lib/supabase";
 import { useAppStore } from "@/store/appStore";
 import { useExpensesStore } from "@/store/expensesStore";
+import * as FileSystem from "expo-file-system";
+import * as FileSystemLegacy from "expo-file-system/legacy";
 import * as Linking from "expo-linking";
 import { useRouter } from "expo-router";
 import * as Sharing from "expo-sharing";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ScrollView, Text, TouchableOpacity, View } from "react-native";
+import { Platform, ScrollView, Text, TouchableOpacity, View } from "react-native";
 
 function monthOptions(lastN = 24) {
     const now = new Date();
@@ -26,6 +28,12 @@ function inMonth(ts: number | string, ym: string) {
     const [y, m] = ym.split("-").map(Number);
     return d.getFullYear() === y && d.getMonth() + 1 === m;
 }
+const toYm = (ts?: string | number | null) => {
+    if (!ts) return null;
+    const d = new Date(ts);
+    const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    return ym;
+};
 
 type MSSRow = {
     ym: string;
@@ -55,7 +63,7 @@ export default function SummaryScreen() {
     const chExpensesRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
     const chMssRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
-    // MSS fetcher (bitta joyda)
+    // MSS fetcher
     const fetchMssForMonth = useCallback(async (ym: string) => {
         setLoadingServer(true);
         try {
@@ -64,13 +72,9 @@ export default function SummaryScreen() {
                 .select("*")
                 .eq("ym", ym);
 
-            // Agar bu oy uchun yozuv yo'q bo'lsa — serverda qayta hisoblatamiz
             if (!error && (data?.length ?? 0) === 0) {
                 await supabase.rpc("recompute_monthly_summary", { _ym: ym });
-                const second = await supabase
-                    .from("monthly_store_summary")
-                    .select("*")
-                    .eq("ym", ym);
+                const second = await supabase.from("monthly_store_summary").select("*").eq("ym", ym);
                 data = second.data ?? [];
             }
             setMss((data ?? []) as MSSRow[]);
@@ -79,16 +83,14 @@ export default function SummaryScreen() {
         }
     }, []);
 
-    // Boshlang'ich yuklash + oy o'zgarsa qayta
+    // Boshlang'ich yuklash + oy o'zgarsa
     useEffect(() => {
         fetchMssForMonth(month);
-        // local expenses ham aktual bo'lsin
         fetchExpenses();
     }, [month, fetchMssForMonth, fetchExpenses]);
 
-    // Realtime: EXPENSES → local expenses’ni yangilash (oy bo‘yicha filtrlash)
+    // Realtime: EXPENSES → local expenses yangilash (oy bo‘yicha)
     useEffect(() => {
-        // eski kanallarni yopamiz
         if (chExpensesRef.current) {
             try { supabase.removeChannel(chExpensesRef.current as any); } catch { }
             chExpensesRef.current = null;
@@ -100,19 +102,20 @@ export default function SummaryScreen() {
                 "postgres_changes",
                 { event: "*", schema: "public", table: "expenses" },
                 (payload) => {
-                    // Faqat tanlangan oyga tegishlisi bo‘lsa, local expenses’ni yangilaymiz
-                    const nextYm =
-                        (payload.new && (payload.new as any).ym) ||
-                        (payload.old && (payload.old as any).ym);
-                    if (!nextYm || nextYm === month) {
-                        fetchExpenses(); // bu rows’ni clientda yangilaydi → netProfit ham yangilanadi
+                    const newYm = toYm((payload.new as any)?.created_at);
+                    const oldYm = toYm((payload.old as any)?.created_at);
+                    if (!newYm && !oldYm) {
+                        fetchExpenses();
+                        return;
+                    }
+                    if (newYm === month || oldYm === month) {
+                        fetchExpenses();
                     }
                 }
             )
             .subscribe();
 
         chExpensesRef.current = ch;
-
         return () => {
             if (chExpensesRef.current) {
                 try { supabase.removeChannel(chExpensesRef.current as any); } catch { }
@@ -128,26 +131,16 @@ export default function SummaryScreen() {
             chMssRef.current = null;
         }
 
-        // Supabase v2 postgres_changes filter’da column filter qo‘llab-quvvatlanadi
         const ch = supabase
             .channel(`mss-realtime-${month}`)
             .on(
                 "postgres_changes",
-                {
-                    event: "*",
-                    schema: "public",
-                    table: "monthly_store_summary",
-                    filter: `ym=eq.${month}`,
-                },
-                () => {
-                    // Serverdagi aggregated jadval o'zgarsa qayta o'qiymiz
-                    fetchMssForMonth(month);
-                }
+                { event: "*", schema: "public", table: "monthly_store_summary", filter: `ym=eq.${month}` },
+                () => fetchMssForMonth(month)
             )
             .subscribe();
 
         chMssRef.current = ch;
-
         return () => {
             if (chMssRef.current) {
                 try { supabase.removeChannel(chMssRef.current as any); } catch { }
@@ -203,8 +196,7 @@ export default function SummaryScreen() {
         return { ...t, expenses: sumExpensesMonth, netProfit };
     }, [rows, sumExpensesMonth]);
 
-    const netProfitColor =
-        totals.netProfit > 0 ? "#10B981" : totals.netProfit < 0 ? "#EF4444" : C.text;
+    const netProfitColor = totals.netProfit > 0 ? "#10B981" : totals.netProfit < 0 ? "#EF4444" : C.text;
 
     // PDF
     const [creatingPdf, setCreatingPdf] = useState(false);
@@ -256,6 +248,35 @@ export default function SummaryScreen() {
     const openFullScreen = () => {
         if (!pdfUri) return;
         router.push({ pathname: "/(main)/admin/report-viewer", params: { uri: pdfUri, title: pdfName } });
+    };
+
+    // YUKLAB OLISH (shu sahifaning ichida)
+    const hasSAF =
+        Platform.OS === "android" &&
+        // @ts-ignore
+        !!FileSystem.StorageAccessFramework &&
+        typeof (FileSystem as any).StorageAccessFramework.requestDirectoryPermissionsAsync === "function";
+
+    const onDownload = async () => {
+        if (!pdfUri) return;
+        try {
+            if (hasSAF) {
+                const saf = (FileSystem as any).StorageAccessFramework;
+                const perm = await saf.requestDirectoryPermissionsAsync();
+                if (!perm.granted) { alert("Ruxsat berilmadi."); return; }
+                const name = (pdfName || "Hisobot").toString().replace(/\.pdf$/i, "");
+                const outUri = await saf.createFileAsync(perm.directoryUri, name, "application/pdf");
+                const b64 = await FileSystemLegacy.readAsStringAsync(pdfUri, { encoding: FileSystemLegacy.EncodingType.Base64 });
+                await FileSystem.writeAsStringAsync(outUri, b64, { encoding: "base64" as any });
+                alert("Fayl yuklab olindi.");
+            } else {
+                // iOS yoki SAF yo‘q → ulashish oynasi
+                await Sharing.shareAsync(pdfUri, { mimeType: "application/pdf", dialogTitle: pdfName || "Hisobot" });
+            }
+        } catch (e) {
+            console.warn("download error", e);
+            alert("Yuklab olishda xatolik yuz berdi.");
+        }
     };
 
     const fmt = (n: number) => (n || 0).toLocaleString();
@@ -322,9 +343,7 @@ export default function SummaryScreen() {
                 </Card>
                 <Card style={{ flex: 1 }}>
                     <Text style={{ color: C.muted, fontWeight: "800" }}>Sof foyda</Text>
-                    <Text
-                        style={{ fontSize: 18, fontWeight: "900", marginTop: 6, color: netProfitColor }}
-                    >
+                    <Text style={{ fontSize: 18, fontWeight: "900", marginTop: 6, color: netProfitColor }}>
                         {fmt(totals.netProfit)} so‘m
                     </Text>
                 </Card>
@@ -339,17 +358,26 @@ export default function SummaryScreen() {
                         </Text>
                     </TouchableOpacity>
 
+                    {/* Tepada: Ulashish + Ochish */}
                     <View style={{ flexDirection: "row", gap: 10, marginTop: 12 }}>
                         <Button title="Ulashish" onPress={onShare} style={{ flex: 1 }} tone="success" />
                         <Button title="Ochish" onPress={openFullScreen} style={{ flex: 1 }} />
                     </View>
 
-                    <Button
-                        title="Bekor qilish"
-                        onPress={() => { setPdfUri(null); }}
-                        tone="neutral"
-                        style={{ marginTop: 10 }}
-                    />
+                    {/* Pastda: chapda Bekor (50%), o‘ngda Yuklab olish (50%) */}
+                    <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
+                        <Button
+                            title="Bekor qilish"
+                            onPress={() => { setPdfUri(null); }}
+                            tone="neutral"
+                            style={{ flex: 1 }}
+                        />
+                        <Button
+                            title="Yuklab olish"
+                            onPress={onDownload}
+                            style={{ flex: 1 }}
+                        />
+                    </View>
                 </Card>
             )}
         </ScrollView>

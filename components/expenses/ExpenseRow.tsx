@@ -45,7 +45,7 @@ export default function ExpenseRow({
                     />
                 </View>
 
-                <TouchableOpacity onPress={onRemove} style={styles.minusBtn}>
+                <TouchableOpacity onPress={onRemove} style={styles.minusBtn} accessibilityLabel="Remove">
                     <Ionicons name="remove" size={18} color="#770E13" />
                 </TouchableOpacity>
             </View>

@@ -14,13 +14,13 @@ export default function ExpenseComposer({ kind }: { kind: ExpenseKind }) {
     const [savedBanner, setSavedBanner] = useState(false);
 
     const titlePlaceholder = useMemo(() => "Mahsulot / Izoh", []);
-    const addRow = () => setRows(r => [...r, { title: "", qty: "", price: "" }]);
-    const removeRow = (i: number) => setRows(r => r.filter((_, idx) => idx !== i));
+    const addRow = () => setRows((r) => [...r, { title: "", qty: "", price: "" }]);
+    const removeRow = (i: number) => setRows((r) => r.filter((_, idx) => idx !== i));
 
     const normalize = (): RowInput[] =>
         rows
-            .map(r => ({ title: r.title.trim(), qty: Number(r.qty || 0), price: Number(r.price || 0) }))
-            .filter(r => r.title && r.qty > 0 && r.price > 0);
+            .map((r) => ({ title: r.title.trim(), qty: Number(r.qty || 0), price: Number(r.price || 0) }))
+            .filter((r) => r.title && r.qty > 0 && r.price > 0);
 
     const total = normalize().reduce((s, r) => s + r.qty * r.price, 0);
 
@@ -36,7 +36,6 @@ export default function ExpenseComposer({ kind }: { kind: ExpenseKind }) {
                 await addBatch(kind, n);
             }
             setRows([{ title: "", qty: "", price: "" }]);
-            // little “Saved!” banner
             setSavedBanner(true);
             setTimeout(() => setSavedBanner(false), 1500);
         } finally {
@@ -47,11 +46,11 @@ export default function ExpenseComposer({ kind }: { kind: ExpenseKind }) {
     const onEdit = (b: ExpenseBatch) => {
         setEditingBatch(b);
         setRows(
-            b.items.map(i => ({
-                title: i.title,
-                qty: String(i.qty ?? 1),
-                price: String(i.price ?? Number(i.amount)),
-            }))
+            b.items.map((i) => {
+                const qty = Number(i.qty ?? 0) || 0;
+                const price = i.price != null ? Number(i.price) : qty > 0 ? Number(i.amount) / qty : 0;
+                return { title: i.title, qty: String(qty || ""), price: String(price || "") };
+            })
         );
         if (!showHistory) setShowHistory(true);
     };
@@ -73,7 +72,6 @@ export default function ExpenseComposer({ kind }: { kind: ExpenseKind }) {
 
     return (
         <View style={{ flex: 1 }}>
-            {/* Saved banner */}
             {savedBanner && (
                 <View style={styles.banner}>
                     <Text style={styles.bannerText}>Saqlandi ✓</Text>
@@ -86,7 +84,7 @@ export default function ExpenseComposer({ kind }: { kind: ExpenseKind }) {
                         key={idx}
                         value={row}
                         titlePlaceholder={titlePlaceholder}
-                        onChange={(v) => setRows(prev => prev.map((p, i) => (i === idx ? v : p)))}
+                        onChange={(v) => setRows((prev) => prev.map((p, i) => (i === idx ? v : p)))}
                         onRemove={() => removeRow(idx)}
                     />
                 ))}
@@ -113,7 +111,7 @@ export default function ExpenseComposer({ kind }: { kind: ExpenseKind }) {
                 </TouchableOpacity>
 
                 <View style={{ height: 10 }} />
-                <TouchableOpacity onPress={() => setShowHistory(s => !s)} style={styles.historyBtn}>
+                <TouchableOpacity onPress={() => setShowHistory((s) => !s)} style={styles.historyBtn}>
                     <Text style={styles.historyText}>{showHistory ? "Tarixni yopish" : "Tarixni ko‘rish"}</Text>
                 </TouchableOpacity>
 
@@ -128,7 +126,6 @@ export default function ExpenseComposer({ kind }: { kind: ExpenseKind }) {
                 <View style={{ height: 24 }} />
             </ScrollView>
 
-            {/* Saving modal */}
             <Modal visible={saving} transparent animationType="fade">
                 <View style={styles.modalWrap}>
                     <View style={styles.modalCard}>
