@@ -1,4 +1,5 @@
 import Toast from "@/components/Toast";
+import { getStorePrice } from "@/lib/pricing";
 import { supabase } from "@/lib/supabase";
 import { useAppStore } from "@/store/appStore";
 import { useSyncStore } from "@/store/syncStore";
@@ -7,6 +8,7 @@ import type { Product, Unit } from "@/types";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect, useLocalSearchParams } from "expo-router";
 import React, { useCallback, useMemo, useRef, useState } from "react";
+
 import {
     FlatList,
     KeyboardAvoidingView,
@@ -138,7 +140,7 @@ export default function Sales() {
         setRows((prev) =>
             prev.map((r) => {
                 if (r.key !== pickOpenFor) return r;
-                const defPrice = store?.type === "branch" ? p.priceBranch ?? 0 : p.priceMarket ?? 0;
+                const defPrice = getStorePrice({ storeId: id!, stores, product: p });
                 return { ...r, product: p, price: String(defPrice) };
             })
         );
