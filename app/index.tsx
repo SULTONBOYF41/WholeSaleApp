@@ -17,6 +17,8 @@ export default function Index() {
         })();
     }, []);
 
+
+
     if (!ready) return null;
     if (!authed) return <Redirect href="/(auth)/login" />;
 

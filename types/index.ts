@@ -3,7 +3,15 @@ export type Unit = "дона" | "кг";
 
 export type Store = { id: string; type: StoreType; name: string; prices: Record<string, number> };
 export type Category = { id: string; name: string };
-export type Product = { id: string; name: string; priceBranch?: number; priceMarket?: number };
+
+// ⬇️ KATEGORIYA BOG'LANISHI QO‘SHILDI
+export type Product = {
+    id: string;
+    name: string;
+    categoryId?: string;   // <-- YANGI
+    priceBranch?: number;
+    priceMarket?: number;
+};
 
 export type Sale = {
     id: string;
@@ -40,20 +48,18 @@ export type QueueItem =
     | { id: string; type: "return_update"; payload: { id: string; qty: number; price: number } }
     | { id: string; type: "return_remove"; payload: { id: string } };
 
-/** DB: public.monthly_store_summary */
 export type MonthlySummary = {
     ym: string;
     store_id: string;
     total_sales: number;
     total_returns: number;
     total_cash: number;
-    delta?: number;             // ixtiyoriy: oy ichidagi o'zgarish
-    debt_raw: number;           // +/- bo'ladi (carryover)
+    delta?: number;
+    debt_raw: number;
     debt: number;
-    computed_at: string; // ISO string
+    computed_at: string;
 };
 
-/** DB view: public.current_month_store_balance (agar ishlatsak) */
 export type CurrentBalanceRow = {
     store_id: string;
     store_name: string;

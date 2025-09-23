@@ -1,6 +1,6 @@
 // app/(main)/admin/catalog.tsx
 import Toast from "@/components/Toast";
-import { Button, C, Card, Chip, H1, H2, Input } from "@/components/UI"; // ← C qo‘shildi
+import { Button, C, Card, Chip, H1, H2, Input } from "@/components/UI";
 import { supabase } from "@/lib/supabase";
 import { useAppStore } from "@/store/appStore";
 import { useSyncStore } from "@/store/syncStore";
@@ -12,6 +12,16 @@ import { Alert, FlatList, Text, TouchableOpacity, View } from "react-native";
 
 type Target = "branch" | "market" | "both";
 const PRIMARY = "#770E13";
+
+// RFC4122 v4 (soddalashtirilgan) — add-store.tsx dagi bilan bir xil
+function uuidv4() {
+    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+        const r = (Math.random() * 16) | 0;
+        const v = c === "x" ? r : (r & 0x3) | 0x8;
+        return v.toString(16);
+    });
+}
+
 
 export default function Catalog() {
     const products = useAppStore((s) => s.products);
@@ -38,61 +48,87 @@ export default function Catalog() {
     };
 
     const submit = async () => {
-        if (!name.trim()) return;
+        const trimmed = name.trim();
+        if (!trimmed) return;
 
-        if (online) toast.showLoading("Saqlanmoqda…");
-        else toast.showLoading("Offline: navbatga yozildi");
+        // Narxlarni tayyorlab olamiz
+        let pb: number | null | undefined = undefined;
+        let pm: number | null | undefined = undefined;
 
+        if (target === "both") {
+            pb = priceBranch.trim() === "" ? null : Number(priceBranch);
+            pm = priceMarket.trim() === "" ? null : Number(priceMarket);
+        } else {
+            const v = price.trim() === "" ? null : Number(price);
+            pb = target === "branch" ? v : (editing?.priceBranch ?? null);
+            pm = target === "market" ? v : (editing?.priceMarket ?? null);
+        }
 
-        try {
-            if (target === "both") {
-                const pb = priceBranch ? +priceBranch : undefined;
-                const pm = priceMarket ? +priceMarket : undefined;
-                if (editing) {
-                    await upsertProduct({
-                        id: editing.id,
-                        name: name.trim(),
-                        priceBranch: pb ?? editing.priceBranch,
-                        priceMarket: pm ?? editing.priceMarket,
-                    });
-                } else {
-                    await upsertProduct({ name: name.trim(), priceBranch: pb, priceMarket: pm });
-                }
-            } else {
-                const v = price ? +price : undefined;
-                if (editing) {
-                    await upsertProduct({
-                        id: editing.id,
-                        name: name.trim(),
-                        priceBranch: target === "branch" ? (v ?? editing.priceBranch) : editing.priceBranch,
-                        priceMarket: target === "market" ? (v ?? editing.priceMarket) : editing.priceMarket,
-                    });
-                } else {
-                    await upsertProduct({
-                        name: name.trim(),
-                        priceBranch: target === "branch" ? v : undefined,
-                        priceMarket: target === "market" ? v : undefined,
-                    });
-                }
-            }
+        // ONLINE: bevosita Supabase'ga yozamiz (id'ni ALBATTA yuboramiz!)
+        if (online) {
+            toast.showLoading(editing ? "Yangilanmoqda…" : "Saqlanmoqda…");
+            try {
+                const productId = editing?.id ?? uuidv4(); // <-- MUHIM: yangi bo'lsa id yaratamiz
 
-            // Online bo‘lsa darhol server bilan sinxron (ro‘yxat tez yangilansin)
-            if (online) {
-                try { await useAppStore.getState().pushNow(); } catch { }
+                const row = {
+                    id: productId,
+                    name: trimmed,
+                    price_branch: pb ?? null,
+                    price_market: pm ?? null,
+                };
+
+                const { error } = await supabase
+                    .from("products")
+                    .upsert(row, { onConflict: "id" });
+
+                if (error) throw error;
+
+                // snapshotni yangilaymiz
                 try { await useAppStore.getState().pullNow(); } catch { }
+
+                toast.hide();
+                toast.show(editing ? "Tahrir saqlandi" : "Mahsulot qo‘shildi");
+                resetForm();
+            } catch (e: any) {
+                toast.hide();
+                toast.show(e?.message || "Saqlashda xato");
             }
-        } finally {
+            return;
+        }
+
+        // OFFLINE: lokal + queue (sizdagi oqim o'zgarishsiz qoladi)
+        toast.showLoading("Offline: navbatga yozildi");
+        try {
+            await upsertProduct({
+                id: editing?.id, // offline oqim o'zi id beradi (pr-... format)
+                name: trimmed,
+                priceBranch: pb ?? undefined,
+                priceMarket: pm ?? undefined,
+            });
+
+            // tezroq ko‘rinishi uchun push→pull urinib ko‘rish mumkin (ixtiyoriy)
+            try { await useAppStore.getState().pushNow(); } catch { }
+            try { await useAppStore.getState().pullNow(); } catch { }
+
+            toast.hide();
+            toast.show(editing ? "Tahrir navbatga yozildi (offline)" : "Qo‘shish navbatga yozildi (offline)");
             resetForm();
+        } catch {
+            toast.hide();
+            toast.show("Offline navbatga yozishda xato");
         }
     };
 
+
+
     const startEdit = (p: Product) => {
         setEditing(p);
-        setName((p as any).name ?? (p as any).title ?? ""); // ← xavfsiz
-        setTarget("branch");
+        setName(p?.name ?? "");
+        // Edit UX: ikkala narx maydonini ko‘rsatamiz
+        setTarget("both");
         setPrice("");
-        setPriceBranch("");
-        setPriceMarket("");
+        setPriceBranch(p?.priceBranch != null ? String(p.priceBranch) : "");
+        setPriceMarket(p?.priceMarket != null ? String(p.priceMarket) : "");
     };
 
     const askRemove = (id: string) =>
@@ -102,12 +138,29 @@ export default function Catalog() {
                 text: "Ҳа",
                 style: "destructive",
                 onPress: async () => {
-                    if (online) toast.show("Saqlanmoqda…");
-                    else toast.show("Offline: navbatga yozildi");
+                    // 1) Optimistik: darrov lokal ro‘yxatdan o‘chirib, navbatga yozamiz
+                    //    (UI darhol yangilanadi)
+                    try {
+                        await removeProduct(id);
+                    } catch { }
 
-                    await removeProduct(id);
+                    // Agar hozir tahrirlayotgan bo‘lsak, formani tozalaymiz
+                    if (editing?.id === id) {
+                        resetForm();
+                    }
 
+                    // 2) Onlayn bo‘lsa – bevosita serverdan ham o‘chirishga harakat qilamiz
+                    //    (muvaffaqiyatli bo‘lsa – pull; bo‘lmasa – queue allaqachon bor)
                     if (online) {
+                        toast.show("O‘chirilmoqda…");
+                        try {
+                            const { error } = await supabase.from("products").delete().eq("id", id);
+                            if (error) throw error;
+                        } catch {
+                            // ignore – pushNow navbatdagi product_remove bilan urinishda davom etadi
+                        }
+
+                        // 3) Navbatni tezroq tozalash va snapshotni yangilash
                         try { await useAppStore.getState().pushNow(); } catch { }
                         try { await useAppStore.getState().pullNow(); } catch { }
                     }
@@ -115,7 +168,8 @@ export default function Catalog() {
             },
         ]);
 
-    // --- Realtime + polling ---
+
+    // --- Realtime + polling (o‘zgarmadi) ---
     const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
     useEffect(() => {
@@ -144,7 +198,7 @@ export default function Catalog() {
         };
     }, []);
 
-    // Xavfsiz sort (undefined nomlar uchun)
+    // Xavfsiz sort
     const listData = useMemo(
         () =>
             [...products].sort((a: any, b: any) =>
@@ -192,11 +246,7 @@ export default function Catalog() {
                     </>
                 )}
 
-                <Button
-                    onPress={submit}
-                    title={editing ? "Сақлаш" : "Қўшиш"}
-                    style={{ marginTop: 8, backgroundColor: PRIMARY }}
-                />
+                <Button onPress={submit} title={editing ? "Сақлаш" : "Қўшиш"} style={{ marginTop: 8, backgroundColor: PRIMARY }} />
 
                 <H2 style={{ marginTop: 10 }}>Маҳсулотлар</H2>
             </View>
@@ -245,7 +295,7 @@ export default function Catalog() {
                                             alignItems: "center",
                                             justifyContent: "center",
                                         }}
-                                        accessibilityLabel="Red"
+                                        accessibilityLabel="Tahrirlash"
                                     >
                                         <Ionicons name="create-outline" size={20} color={PRIMARY} />
                                     </TouchableOpacity>
@@ -262,7 +312,7 @@ export default function Catalog() {
                                             alignItems: "center",
                                             justifyContent: "center",
                                         }}
-                                        accessibilityLabel="Udl"
+                                        accessibilityLabel="O'chirish"
                                     >
                                         <Ionicons name="close-outline" size={20} color="#E23D3D" />
                                     </TouchableOpacity>

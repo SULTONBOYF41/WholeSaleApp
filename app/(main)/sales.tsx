@@ -1,3 +1,4 @@
+// app/(main)/sales.tsx
 import Toast from "@/components/Toast";
 import { getStorePrice } from "@/lib/pricing";
 import { supabase } from "@/lib/supabase";
@@ -6,9 +7,7 @@ import { useSyncStore } from "@/store/syncStore";
 import { useToastStore } from "@/store/toastStore";
 import type { Product, Unit } from "@/types";
 import { Ionicons } from "@expo/vector-icons";
-import { useFocusEffect, useLocalSearchParams } from "expo-router";
-import React, { useCallback, useMemo, useRef, useState } from "react";
-
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
     FlatList,
     KeyboardAvoidingView,
@@ -32,22 +31,27 @@ type CashReceipt = {
     created_at: string;
 };
 
+const PRIMARY = "#770E13";
+
 export default function Sales() {
-    const { id } = useLocalSearchParams<{ id: string }>();
+    // === Global state ===
+    const currentStoreId = useAppStore((s) => s.currentStoreId);
+    const stores = useAppStore((s) => s.stores);
+    const products = useAppStore((s) => s.products);
 
     const addSale = useAppStore((s) => s.addSale);
+    const pushNow = useAppStore((s) => s.pushNow);
+    const pullNow = useAppStore((s) => s.pullNow);
 
+    // Offline-only cash helpers
     const addCashOffline = useAppStore((s) => s.addCash);
     const updateCashOffline = useAppStore((s) => s.updateCash);
     const removeCashOffline = useAppStore((s) => s.removeCash);
 
-    const products = useAppStore((s) => s.products);
-    const stores = useAppStore((s) => s.stores);
-    const store = stores.find((s) => s.id === id);
     const online = useSyncStore((s) => s.online);
-
     const toast = useToastStore();
 
+    // === Local UI state ===
     const [rows, setRows] = useState<Row[]>([{ key: "r1", qty: "", price: "", unit: "дона" }]);
     const [cash, setCash] = useState("");
     const [pickOpenFor, setPickOpenFor] = useState<string | null>(null);
@@ -61,15 +65,104 @@ export default function Sales() {
     const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
+    const store = useMemo(
+        () => stores.find((s) => String(s.id) === String(currentStoreId)),
+        [stores, currentStoreId]
+    );
+    const effectiveStoreId = String(currentStoreId || "");
+
+    const money = (n: number) => (n || 0).toLocaleString() + " so‘m";
+    const parseNum = (v: string) => Number((v || "").replace(/\s/g, "")) || 0;
+
+    const filteredProducts = useMemo(() => {
+        const q = search.trim().toLowerCase();
+        if (!q) return products;
+        return products.filter((p) => (p.name || "").toLowerCase().includes(q));
+    }, [products, search]);
+
+    const total = useMemo(
+        () => rows.reduce((a, r) => a + parseNum(r.qty) * parseNum(r.price), 0),
+        [rows]
+    );
+
+    const openPicker = (rowKey: string) => setPickOpenFor(rowKey);
+
+    const selectProduct = (p: Product) => {
+        const defPrice = getStorePrice({ storeId: effectiveStoreId, stores, product: p });
+        setRows((prev) =>
+            prev.map((r) =>
+                r.key === pickOpenFor ? { ...r, product: p, price: defPrice != null ? String(defPrice) : r.price } : r
+            )
+        );
+        setPickOpenFor(null);
+        setSearch("");
+    };
+
+    const addRow = () =>
+        setRows((r) => [...r, { key: `r${r.length + 1}`, qty: "", price: "", unit: "дона" }]);
+
+    const removeRow = (key: string) =>
+        setRows((r) => (r.length > 1 ? r.filter((x) => x.key !== key) : r));
+
+    const saveAll = async () => {
+        if (!effectiveStoreId) {
+            toast.show("Iltimos, do‘konni tanlang.");
+            return;
+        }
+
+        if (online) toast.showLoading("Saqlanmoqda…");
+        else toast.showLoading("Offline: navbatga yozildi");
+
+        const batchId = "b-" + Date.now().toString(36);
+        console.log("[Sales] saveAll start. storeId =", effectiveStoreId);
+
+        try {
+            for (const r of rows) {
+                if (!r.product) continue;
+                let priceNum = parseNum(r.price);
+                if (!priceNum) {
+                    const defPrice = getStorePrice({ storeId: effectiveStoreId, stores, product: r.product });
+                    priceNum = Number(defPrice || 0);
+                }
+                const qtyNum = parseNum(r.qty);
+                if (!qtyNum || !priceNum) continue;
+
+                await addSale({
+                    storeId: effectiveStoreId,
+                    productName: r.product.name,
+                    qty: qtyNum,
+                    price: priceNum,
+                    unit: r.unit || "дона",
+                    batchId,
+                });
+            }
+
+            setRows([{ key: "r1", qty: "", price: "", unit: "дона" }]);
+
+            try {
+                console.log("[Sales] pushNow() …");
+                await pushNow();
+            } catch (e) {
+                console.log("[Sales] pushNow failed:", e);
+            }
+            try {
+                await pullNow();
+            } catch { }
+        } finally {
+            try { toast.hide(); } catch { }
+        }
+    };
+
+    // === CASH (tushum) ===
     const loadReceipts = useCallback(async () => {
-        if (!id) return;
+        if (!effectiveStoreId) return;
         const { data, error } = await supabase
             .from("cash_receipts")
             .select("id,store_id,amount,note,created_at")
-            .eq("store_id", id)
+            .eq("store_id", effectiveStoreId)
             .order("created_at", { ascending: false });
         if (!error) setReceipts(data ?? []);
-    }, [id]);
+    }, [effectiveStoreId]);
 
     const startPolling = useCallback(() => {
         if (pollRef.current) return;
@@ -86,122 +179,71 @@ export default function Sales() {
     }, []);
 
     const subscribeRealtime = useCallback(() => {
-        if (!id) return;
         if (channelRef.current) {
-            try {
-                supabase.removeChannel(channelRef.current);
-            } catch { }
+            try { supabase.removeChannel(channelRef.current); } catch { }
             channelRef.current = null;
         }
+        if (!effectiveStoreId) return;
+
         const ch = supabase
-            .channel(`cash-receipts:${id}`)
+            .channel(`cash-receipts:${effectiveStoreId}`)
             .on(
                 "postgres_changes",
-                { event: "*", schema: "public", table: "cash_receipts", filter: `store_id=eq.${id}` },
+                { event: "*", schema: "public", table: "cash_receipts", filter: `store_id=eq.${effectiveStoreId}` },
                 () => loadReceipts().catch(() => { })
             )
             .subscribe();
+
         channelRef.current = ch;
-    }, [id, loadReceipts]);
+    }, [effectiveStoreId, loadReceipts]);
 
-    useFocusEffect(
-        React.useCallback(() => {
-            loadReceipts().catch(() => { });
-            subscribeRealtime();
-            if (online) startPolling();
+    useEffect(() => {
+        setRows([{ key: "r1", qty: "", price: "", unit: "дона" }]);
+        setSearch("");
+        setShowHistory(false);
+        setCash("");
 
-            return () => {
-                stopPolling();
-                if (channelRef.current) {
-                    try {
-                        supabase.removeChannel(channelRef.current);
-                    } catch { }
-                    channelRef.current = null;
-                }
-            };
-        }, [online, loadReceipts, subscribeRealtime, startPolling, stopPolling])
-    );
+        loadReceipts().catch(() => { });
+        subscribeRealtime();
+        if (online) startPolling();
 
-    React.useEffect(() => {
+        return () => {
+            stopPolling();
+            if (channelRef.current) {
+                try { supabase.removeChannel(channelRef.current); } catch { }
+                channelRef.current = null;
+            }
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [effectiveStoreId]);
+
+    useEffect(() => {
         if (online) startPolling();
         else stopPolling();
     }, [online, startPolling, stopPolling]);
 
-    const filteredProducts = useMemo(() => {
-        const q = search.trim().toLowerCase();
-        if (!q) return products;
-        return products.filter((p) => (p.name || "").toLowerCase().includes(q));
-    }, [products, search]);
-
-    const total = useMemo(() => rows.reduce((a, r) => a + (Number(r.qty) || 0) * (Number(r.price) || 0), 0), [rows]);
-
-    const openPicker = (rowKey: string) => setPickOpenFor(rowKey);
-    const selectProduct = (p: Product) => {
-        setRows((prev) =>
-            prev.map((r) => {
-                if (r.key !== pickOpenFor) return r;
-                const defPrice = getStorePrice({ storeId: id!, stores, product: p });
-                return { ...r, product: p, price: String(defPrice) };
-            })
-        );
-        setPickOpenFor(null);
-        setSearch("");
-    };
-
-    const addRow = () => setRows((r) => [...r, { key: `r${r.length + 1}`, qty: "", price: "", unit: "дона" }]);
-    const removeRow = (key: string) => setRows((r) => (r.length > 1 ? r.filter((x) => x.key !== key) : r));
-
-    const saveAll = async () => {
-        if (online) toast.showLoading("Saqlanmoqda…");
-        else toast.showLoading("Offline: navbatga yozildi");
-        const batchId = "b-" + Date.now().toString(36);
-        try {
-            for (const r of rows) {
-                if (!r.product || !r.qty || !r.price) continue;
-                await addSale({
-                    storeId: id!,
-                    productName: r.product.name,
-                    qty: +r.qty,
-                    price: +r.price,
-                    unit: r.unit,
-                    batchId,
-                });
-            }
-            setRows([{ key: "r1", qty: "", price: "", unit: "дона" }]);
-
-            try {
-                await useAppStore.getState().pushNow();
-            } catch { }
-            try {
-                await useAppStore.getState().pullNow();
-            } catch { }
-        } finally {
-            // toast auto-hide
-        }
-    };
-
-    // ====== KASSA ======
     const saveCash = async () => {
-        const amt = Number(cash || "0");
-        if (!amt || !id) return;
+        const amt = parseNum(cash);
+        if (!amt || !effectiveStoreId) return;
 
         if (online) toast.showLoading("Saqlanmoqda…");
         else toast.showLoading("Offline: navbatga yozildi");
 
         if (online) {
-            const { error } = await supabase.from("cash_receipts").insert({ store_id: id, amount: amt });
+            const { error } = await supabase.from("cash_receipts").insert({ store_id: effectiveStoreId, amount: amt });
             if (!error) {
                 setCash("");
                 setShowHistory(true);
                 await loadReceipts();
             } else {
-                await addCashOffline(id, amt);
+                await addCashOffline(effectiveStoreId, amt);
             }
         } else {
-            await addCashOffline(id, amt);
+            await addCashOffline(effectiveStoreId, amt);
             setCash("");
             setShowHistory(true);
         }
+        try { toast.hide(); } catch { }
     };
 
     const openEditCash = (cid: string, amount: number) => {
@@ -211,20 +253,23 @@ export default function Sales() {
 
     const submitEditCash = async () => {
         if (!editCashId) return;
+        const amt = parseNum(editCashAmount);
+
         if (online) toast.showLoading("Saqlanmoqda…");
         else toast.showLoading("Offline: navbatga yozildi");
 
-        const amt = Number(editCashAmount || "0");
         if (online) {
             const { error } = await supabase.from("cash_receipts").update({ amount: amt }).eq("id", editCashId);
             if (!error) {
                 setEditCashId(null);
                 await loadReceipts();
+                try { toast.hide(); } catch { }
                 return;
             }
         }
         await updateCashOffline(editCashId, amt);
         setEditCashId(null);
+        try { toast.hide(); } catch { }
     };
 
     const deleteCashItem = async (cid: string) => {
@@ -235,11 +280,15 @@ export default function Sales() {
             const { error } = await supabase.from("cash_receipts").delete().eq("id", cid);
             if (!error) {
                 await loadReceipts();
+                try { toast.hide(); } catch { }
                 return;
             }
         }
         await removeCashOffline(cid);
+        try { toast.hide(); } catch { }
     };
+
+    const NeedStore = !effectiveStoreId;
 
     return (
         <KeyboardAvoidingView
@@ -252,7 +301,44 @@ export default function Sales() {
                 contentContainerStyle={{ padding: 16, paddingBottom: 140 }}
                 keyboardShouldPersistTaps="handled"
             >
-                <Text style={{ fontSize: 20, fontWeight: "800" }}>Сотиш</Text>
+                {/* Endi ichki StorePicker yo'q. Do'konni layoutdagi tanlagichdan tanlaysiz. */}
+
+                {NeedStore ? (
+                    <View
+                        style={{
+                            marginTop: 8,
+                            padding: 12,
+                            borderRadius: 12,
+                            borderWidth: 1,
+                            borderColor: "#E9ECF1",
+                            backgroundColor: "#FFF7ED",
+                        }}
+                    >
+                        <Text style={{ fontWeight: "800", color: "#7C2D12" }}>
+                            Avval filial yoki do‘konni tanlang.
+                        </Text>
+                    </View>
+                ) : (
+                    <View
+                        style={{
+                            marginBottom: 8,
+                            padding: 10,
+                            borderRadius: 12,
+                            borderWidth: 1,
+                            borderColor: "#E9ECF1",
+                            backgroundColor: "#F9FAFB",
+                        }}
+                    >
+                        <Text style={{ fontWeight: "800" }}>
+                            {store ? `${store.name} (${store.type === "branch" ? "Filial" : "Do‘kon"})` : "Store topilmadi"}
+                        </Text>
+                        <Text style={{ color: "#6B7280", marginTop: 2, fontSize: 12 }}>
+                            ID: {effectiveStoreId || "—"}
+                        </Text>
+                    </View>
+                )}
+
+                <Text style={{ fontSize: 20, fontWeight: "800", marginTop: 6 }}>Сотиш</Text>
 
                 {rows.map((r) => (
                     <View
@@ -268,12 +354,14 @@ export default function Sales() {
                     >
                         <Pressable
                             onPress={() => openPicker(r.key)}
+                            disabled={NeedStore}
                             style={{
                                 padding: 12,
                                 borderWidth: 1,
                                 borderRadius: 10,
-                                borderColor: "#ddd",
-                                backgroundColor: "#F8F8FA",
+                                borderColor: NeedStore ? "#f0f0f0" : "#ddd",
+                                backgroundColor: NeedStore ? "#fafafa" : "#F8F8FA",
+                                opacity: NeedStore ? 0.7 : 1,
                             }}
                         >
                             <Text>{r.product ? r.product.name : "Маҳсулотни танланг"}</Text>
@@ -286,17 +374,20 @@ export default function Sales() {
                                 onChangeText={(v) => setRows((rs) => rs.map((x) => (x.key === r.key ? { ...x, qty: v } : x)))}
                                 keyboardType="numeric"
                                 style={{ flex: 1, borderWidth: 1, borderRadius: 10, padding: 12 }}
+                                editable={!NeedStore}
                             />
                             <TextInput
-                                placeholder="Нарх"
+                                placeholder="Нарх (bo'sh qoldirsangiz — default olinadi)"
                                 value={r.price}
                                 onChangeText={(v) => setRows((rs) => rs.map((x) => (x.key === r.key ? { ...x, price: v } : x)))}
                                 keyboardType="numeric"
                                 style={{ flex: 1, borderWidth: 1, borderRadius: 10, padding: 12 }}
+                                editable={!NeedStore}
                             />
 
                             <TouchableOpacity
                                 onPress={() => removeRow(r.key)}
+                                disabled={NeedStore}
                                 style={{
                                     width: 36,
                                     height: 36,
@@ -306,41 +397,53 @@ export default function Sales() {
                                     borderColor: "#F4C7CB",
                                     alignItems: "center",
                                     justifyContent: "center",
+                                    opacity: NeedStore ? 0.6 : 1,
                                 }}
                             >
-                                <Ionicons name="remove-circle-outline" size={18} color="#770E13" />
+                                <Ionicons name="remove-circle-outline" size={18} color={PRIMARY} />
                             </TouchableOpacity>
                         </View>
 
                         <Text style={{ marginTop: 6, fontWeight: "700" }}>
-                            Summa: {((Number(r.qty) || 0) * (Number(r.price) || 0)).toLocaleString()} so‘m
+                            Summa: {money(parseNum(r.qty) * parseNum(r.price))}
                         </Text>
                     </View>
                 ))}
 
                 <TouchableOpacity
                     onPress={addRow}
+                    disabled={NeedStore}
                     style={{
                         alignSelf: "flex-start",
                         paddingVertical: 10,
                         paddingHorizontal: 14,
-                        backgroundColor: "#780E14",
+                        backgroundColor: PRIMARY,
                         borderRadius: 12,
                         marginTop: 12,
-                        borderWidth: 0,
                         shadowColor: "#000",
                         shadowOpacity: 0.08,
                         shadowRadius: 6,
                         shadowOffset: { width: 0, height: 2 },
                         elevation: 2,
+                        opacity: NeedStore ? 0.6 : 1,
                     }}
                 >
                     <Text style={{ fontWeight: "800", color: "#fff" }}>Қатор қўшиш</Text>
                 </TouchableOpacity>
 
-                <Text style={{ fontWeight: "800", marginTop: 12 }}>Умумий сумма: {total.toLocaleString()} so‘m</Text>
+                <Text style={{ fontWeight: "800", marginTop: 12 }}>Умумiy summa: {money(total)}</Text>
 
-                <TouchableOpacity onPress={saveAll} style={{ backgroundColor: "#770E13", padding: 14, borderRadius: 12, marginTop: 8 }}>
+                <TouchableOpacity
+                    onPress={saveAll}
+                    disabled={NeedStore}
+                    style={{
+                        backgroundColor: PRIMARY,
+                        padding: 14,
+                        borderRadius: 12,
+                        marginTop: 8,
+                        opacity: NeedStore ? 0.6 : 1,
+                    }}
+                >
                     <Text style={{ color: "#fff", textAlign: "center", fontWeight: "800" }}>Сақлаш</Text>
                 </TouchableOpacity>
 
@@ -363,33 +466,35 @@ export default function Sales() {
                             onChangeText={setCash}
                             keyboardType="numeric"
                             style={{ flex: 1, borderWidth: 1, borderRadius: 10, padding: 12 }}
+                            editable={!NeedStore}
                         />
                         <TouchableOpacity
                             onPress={saveCash}
+                            disabled={NeedStore}
                             style={{
                                 backgroundColor: "#10B981",
                                 paddingHorizontal: 16,
                                 borderRadius: 10,
                                 justifyContent: "center",
+                                opacity: NeedStore ? 0.6 : 1,
                             }}
                         >
-                            <Text style={{ color: "#fff", fontWeight: "800" }}>Олиш</Text>
+                            <Text style={{ color: "#fff", fontWeight: "800" }}>Оlish</Text>
                         </TouchableOpacity>
                     </View>
 
-                    {/* Tarix */}
                     <TouchableOpacity
                         onPress={() => setShowHistory((v) => !v)}
                         style={{ marginTop: 12, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}
                     >
-                        <Text style={{ fontWeight: "700" }}>Тарих</Text>
+                        <Text style={{ fontWeight: "700" }}>Тarix</Text>
                         <Ionicons name={showHistory ? "chevron-up" : "chevron-down"} size={18} color="#333" />
                     </TouchableOpacity>
 
                     {showHistory && (
                         <View style={{ marginTop: 6 }}>
                             {receipts.length === 0 ? (
-                                <Text style={{ color: "#777" }}>Ҳали тушум йўқ</Text>
+                                <Text style={{ color: "#777" }}>Ҳali tushum yo‘q</Text>
                             ) : (
                                 receipts.map((r) => (
                                     <View
@@ -404,13 +509,19 @@ export default function Sales() {
                                         }}
                                     >
                                         <View style={{ flex: 1, paddingRight: 10 }}>
-                                            <Text style={{ fontWeight: "800" }}>{Number(r.amount).toLocaleString()} so‘m</Text>
-                                            <Text style={{ color: "#777", fontSize: 12, marginTop: 2 }}>{new Date(r.created_at).toLocaleString()}</Text>
+                                            <Text style={{ fontWeight: "800" }}>
+                                                {(Number(r.amount) || 0).toLocaleString()} so‘m
+                                            </Text>
+                                            <Text style={{ color: "#777", fontSize: 12, marginTop: 2 }}>
+                                                {new Date(r.created_at).toLocaleString()}
+                                            </Text>
                                         </View>
-
                                         <View style={{ flexDirection: "row", gap: 8 }}>
                                             <TouchableOpacity
-                                                onPress={() => openEditCash(r.id, Number(r.amount))}
+                                                onPress={() => {
+                                                    setEditCashId(r.id);
+                                                    setEditCashAmount(String(r.amount));
+                                                }}
                                                 style={{
                                                     width: 36,
                                                     height: 36,
@@ -422,7 +533,7 @@ export default function Sales() {
                                                     justifyContent: "center",
                                                 }}
                                             >
-                                                <Ionicons name="create-outline" size={18} color="#770E13" />
+                                                <Ionicons name="create-outline" size={18} color={PRIMARY} />
                                             </TouchableOpacity>
                                             <TouchableOpacity
                                                 onPress={() => deleteCashItem(r.id)}
@@ -456,7 +567,12 @@ export default function Sales() {
                 >
                     <View style={{ backgroundColor: "#fff", borderRadius: 12, maxHeight: "70%", overflow: "hidden" }}>
                         <View style={{ padding: 12, borderBottomWidth: 1, borderColor: "#eee" }}>
-                            <TextInput placeholder="Қидирув..." value={search} onChangeText={setSearch} style={{ borderWidth: 1, borderRadius: 10, padding: 10 }} />
+                            <TextInput
+                                placeholder="Қidiruv..."
+                                value={search}
+                                onChangeText={setSearch}
+                                style={{ borderWidth: 1, borderRadius: 10, padding: 10 }}
+                            />
                         </View>
                         <FlatList
                             data={filteredProducts}
@@ -466,7 +582,7 @@ export default function Sales() {
                                 <TouchableOpacity onPress={() => selectProduct(item)} style={{ padding: 14 }}>
                                     <Text style={{ fontWeight: "700" }}>{item.name}</Text>
                                     <Text style={{ color: "#666", marginTop: 2 }}>
-                                        Филиал: {item.priceBranch ?? 0} · Дўкон: {item.priceMarket ?? 0}
+                                        Филиal: {item.priceBranch ?? 0} · Do‘kon: {item.priceMarket ?? 0}
                                     </Text>
                                 </TouchableOpacity>
                             )}
@@ -482,8 +598,8 @@ export default function Sales() {
                     style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.2)", justifyContent: "center", padding: 24 }}
                 >
                     <View style={{ backgroundColor: "#fff", borderRadius: 12, padding: 14 }}>
-                        <Text style={{ fontWeight: "800" }}>Олинган пулни таҳрирлаш</Text>
-                        <Text style={{ marginTop: 8 }}>Сумма</Text>
+                        <Text style={{ fontWeight: "800" }}>Оlinган pulni tahrirlash</Text>
+                        <Text style={{ marginTop: 8 }}>Summa</Text>
                         <TextInput
                             value={editCashAmount}
                             onChangeText={setEditCashAmount}
@@ -501,19 +617,21 @@ export default function Sales() {
                                     alignItems: "center",
                                 }}
                             >
-                                <Text style={{ fontWeight: "800" }}>Бекор</Text>
+                                <Text style={{ fontWeight: "800" }}>Bekor</Text>
                             </TouchableOpacity>
                             <TouchableOpacity
-                                onPress={submitEditCash}
+                                onPress={async () => {
+                                    await submitEditCash();
+                                }}
                                 style={{
                                     flex: 1,
-                                    backgroundColor: "#770E13",
+                                    backgroundColor: PRIMARY,
                                     borderRadius: 12,
                                     paddingVertical: 12,
                                     alignItems: "center",
                                 }}
                             >
-                                <Text style={{ fontWeight: "800", color: "#fff" }}>Сақлаш</Text>
+                                <Text style={{ fontWeight: "800", color: "#fff" }}>Saqlash</Text>
                             </TouchableOpacity>
                         </View>
                     </View>

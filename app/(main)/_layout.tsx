@@ -1,5 +1,6 @@
 // app/(main)/_layout.tsx
 import NetBanner from "@/components/NetBanner";
+import StorePicker from "@/components/StorePicker";
 import { signOutLocal } from "@/lib/local-auth";
 import { useAppStore } from "@/store/appStore";
 import { Ionicons } from "@expo/vector-icons";
@@ -30,6 +31,8 @@ const normalize = (p?: string | null) => {
     return s;
 };
 
+const PICKER_PATHS = new Set(["/report", "/sales", "/returns", "/monitoring"]);
+
 export default function MainLayout() {
     const menuOpen = useAppStore((s) => s.menuOpen);
     const setMenu = useAppStore((s) => s.setMenu);
@@ -39,30 +42,29 @@ export default function MainLayout() {
     const pathname = usePathname();
     const np = normalize(pathname);
 
-    // Filial/do‘kon nomi (default)
-    const defaultStoreName = useMemo(() => {
-        return stores.find((x) => x.id === currentStoreId)?.name ?? "Рукшона — Меню";
-    }, [stores, currentStoreId]);
-
     // Header sarlavhasi
     const headerTitle = useMemo(() => {
-        // Xarajatlar
         if (np.startsWith("/expenses")) {
             if (np.includes("/family")) return "Xarajatlar — Oilaviy";
             if (np.includes("/shop")) return "Xarajatlar — Do'kon";
             if (np.includes("/bank")) return "Xarajatlar — Bank";
             return "Xarajatlar — Hisobot";
         }
-        // Admin
         if (np.startsWith("/admin")) {
             if (np.includes("/catalog")) return "Админ — Каталог";
             if (np.includes("/add-store")) return "Админ — Филиал/Дўкон қўшиш";
-            if (np.includes("/summary")) return "Админ — Umumiy hisobot"; // ✅
+            if (np.includes("/summary")) return "Админ — Umumiy hisobot";
             return "Админ";
         }
-        // Default: tanlangan bo‘lim nomi
+        if (np === "/report") return "Hisobot";
+        if (np === "/sales") return "Сотиш";
+        if (np === "/returns") return "Қайтариш";
+        if (np === "/monitoring") return "Monitoring";
+        // Default nom
+        const defaultStoreName =
+            stores.find((x) => x.id === currentStoreId)?.name ?? "Рукшона — Меню";
         return defaultStoreName;
-    }, [np, defaultStoreName]);
+    }, [np, stores, currentStoreId]);
 
     // Top (Header + NetBanner) balandligi
     const [topH, setTopH] = useState<number>(56 + (Platform.OS === "android" ? 8 : 0) + 32);
@@ -120,6 +122,13 @@ export default function MainLayout() {
                         <Text style={styles.headerTitle}>{headerTitle}</Text>
                         <View style={{ flex: 1 }} />
                     </View>
+
+                    {/* FAQAT 4 sahifada StorePicker */}
+                    {PICKER_PATHS.has(np) && (
+                        <View style={{ paddingHorizontal: 12, paddingBottom: 8 }}>
+                            <StorePicker compact />
+                        </View>
+                    )}
                 </SafeAreaView>
 
                 {/* Online/Offline Banner */}
@@ -153,23 +162,16 @@ export default function MainLayout() {
 }
 
 function LeftMenu({ onClose }: { onClose: () => void }) {
-    const stores = useAppStore((s) => s.stores);
-    const setCurrentStore = useAppStore((s) => s.setCurrentStore);
-
-    const branches = stores.filter((s) => s.type === "branch");
-    const markets = stores.filter((s) => s.type === "market");
-
-    const goStore = (id: string) => {
+    const go = (href: Href) => {
         onClose();
-        setCurrentStore(id);
-        router.push({ pathname: "/(main)/store/[id]/dashboard", params: { id } });
+        router.push(href);
     };
 
     const goAdmin = (
         href:
             | "/(main)/admin/add-store"
             | "/(main)/admin/catalog"
-            | "/(main)/admin/summary" 
+            | "/(main)/admin/summary"
     ) => {
         onClose();
         router.push(href);
@@ -188,39 +190,39 @@ function LeftMenu({ onClose }: { onClose: () => void }) {
 
     return (
         <View style={styles.drawerInner}>
-            <Text style={styles.sectionTitleRed}>Филиаллар</Text>
-            {branches.length === 0 && <Text style={styles.emptyHint}>Ҳали филиал қўшилмаган</Text>}
-            {branches.map((b) => (
-                <TouchableOpacity key={b.id} onPress={() => goStore(b.id)} style={styles.drawerItem}>
-                    <Text style={styles.drawerText}>{b.name}</Text>
-                </TouchableOpacity>
-            ))}
+            <Text style={styles.sectionTitleRed}>Асосий</Text>
 
-            <View style={styles.separator} />
+            <TouchableOpacity onPress={() => go("/(main)/report" as Href)} style={styles.adminItem}>
+                <Ionicons name="stats-chart" size={18} color="#333" />
+                <Text style={styles.adminText}>Hisobot</Text>
+            </TouchableOpacity>
 
-            <Text style={styles.sectionTitleRed}>Дўкон/Супермаркетлар</Text>
-            {markets.length === 0 && <Text style={styles.emptyHint}>Ҳали дўкон қўшилмаган</Text>}
-            {markets.map((m) => (
-                <TouchableOpacity key={m.id} onPress={() => goStore(m.id)} style={styles.drawerItem}>
-                    <Text style={styles.drawerText}>{m.name}</Text>
-                </TouchableOpacity>
-            ))}
+            <TouchableOpacity onPress={() => go("/(main)/sales" as Href)} style={styles.adminItem}>
+                <Ionicons name="cart" size={18} color="#333" />
+                <Text style={styles.adminText}>Сотиш</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity onPress={() => go("/(main)/returns" as Href)} style={styles.adminItem}>
+                <Ionicons name="refresh" size={18} color="#333" />
+                <Text style={styles.adminText}>Қайтариш</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity onPress={() => go("/(main)/monitoring" as Href)} style={styles.adminItem}>
+                <Ionicons name="pulse" size={18} color="#333" />
+                <Text style={styles.adminText}>Monitoring</Text>
+            </TouchableOpacity>
 
             <View style={styles.separator} />
 
             <Text style={styles.sectionTitle}>Админ</Text>
-
             <TouchableOpacity onPress={() => goAdmin("/(main)/admin/add-store")} style={styles.adminItem}>
                 <Ionicons name="business" size={18} color="#333" />
                 <Text style={styles.adminText}>Филиал/Дўкон қўшиш</Text>
             </TouchableOpacity>
-
             <TouchableOpacity onPress={() => goAdmin("/(main)/admin/catalog")} style={styles.adminItem}>
                 <Ionicons name="albums" size={18} color="#333" />
                 <Text style={styles.adminText}>Каталог</Text>
             </TouchableOpacity>
-
-            {/* ✅ Umumiy Hisobot menyusi */}
             <TouchableOpacity onPress={() => goAdmin("/(main)/admin/summary")} style={styles.adminItem}>
                 <Ionicons name="stats-chart" size={18} color="#333" />
                 <Text style={styles.adminText}>Umumiy Hisobot</Text>
@@ -283,11 +285,6 @@ const styles = StyleSheet.create({
 
     sectionTitleRed: { fontWeight: "800", color: "#770E13", marginBottom: 6 },
     sectionTitle: { fontWeight: "800", color: "#222", marginTop: 4, marginBottom: 6 },
-
-    emptyHint: { color: "#888", marginBottom: 6 },
-
-    drawerItem: { paddingVertical: 10 },
-    drawerText: { color: "#222", fontSize: 15 },
 
     separator: { height: 10, borderBottomWidth: 1, borderColor: "#f0f0f0", marginVertical: 6 },
 

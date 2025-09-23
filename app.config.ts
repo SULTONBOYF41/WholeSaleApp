@@ -14,7 +14,8 @@ export default (): ExpoConfig => ({
 
     android: {
         package: "com.ruhshonatortapps.SavdoHisobi",
-        "versionCode": 1
+        "versionCode": 1,
+        permissions: ["CAMERA"] // ⬅️ kamerani so'raymiz
     },
 
     ios: {
@@ -30,7 +31,7 @@ export default (): ExpoConfig => ({
 
 
     runtimeVersion: "1.0.0", // <<<<<<<<< MUHIM: bare workflow uchun qat’iy satr
-    
+
 
     "owner": "ruhshonatortapps",
 
@@ -43,8 +44,8 @@ export default (): ExpoConfig => ({
     },
 
     extra: {
-        SUPABASE_URL: process.env.SUPABASE_URL,
-        SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY,
+        SUPABASE_URL: process.env.EXPO_PUBLIC_SUPABASE_URL,
+        SUPABASE_ANON_KEY: process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY,
         eas: {
             projectId: "1333c9b1-8910-4a25-9354-97cf2d39be36",
         },
@@ -55,6 +56,7 @@ export default (): ExpoConfig => ({
         "expo-font",
         "expo-secure-store",
         "expo-web-browser",
+        "expo-dev-client", // ⬅️ QO‘SHING (faqat dev build uchun foydali)
     ],
 });
 

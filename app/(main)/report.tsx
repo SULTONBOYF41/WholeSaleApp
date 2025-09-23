@@ -1,45 +1,44 @@
-// app/(main)/store/[id]/dashboard.tsx
+// app/(main)/report.tsx
 import Toast from "@/components/Toast";
 import { exportDashboardPdf } from "@/lib/pdf";
 import { supabase } from "@/lib/supabase";
 import { useAppStore } from "@/store/appStore";
 import { useToastStore } from "@/store/toastStore";
 import type { MonthlySummary } from "@/types";
-import { useLocalSearchParams, useRouter } from "expo-router";
-import * as Sharing from "expo-sharing";
 import React, { useEffect, useMemo, useState } from "react";
 import { Linking, Modal, Pressable, ScrollView, Text, TouchableOpacity, View } from "react-native";
 
 const P = "#770E13";
 
-export default function Dashboard() {
-    const router = useRouter();
-    const { id } = useLocalSearchParams<{ id: string }>();
-
+export default function ReportScreen() {
+    // ---- Global stores
+    const selectedStoreId = useAppStore((s) => s.currentStoreId);
+    const stores = useAppStore((s) => s.stores);
     const allSales = useAppStore((s) => s.sales);
     const allReturns = useAppStore((s) => s.returns);
     const cash = useAppStore((s) => s.cashReceipts);
-    const stores = useAppStore((s) => s.stores);
-    const storeName = stores.find((s) => s.id === id)?.name ?? "";
 
     const toast = useToastStore();
 
-    // PDF modal
+    // ---- Local UI state
     const [pdfModalOpen, setPdfModalOpen] = useState(false);
     const [pdfLink, setPdfLink] = useState<string | null>(null);
     const [pdfName, setPdfName] = useState<string>("Hisobot.pdf");
 
-    // Oy (YYYY-MM)
     const [month, setMonth] = useState<string>(() => {
         const d = new Date();
         return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
     });
 
-    // Server summary row
     const [msRow, setMsRow] = useState<MonthlySummary | null>(null);
     const [msLoading, setMsLoading] = useState(false);
 
-    // Lokal filter faqat rank/backup uchun
+    // ---- Derived helpers
+    const storeName = useMemo(
+        () => stores.find((s) => String(s.id) === String(selectedStoreId))?.name ?? "",
+        [stores, selectedStoreId]
+    );
+
     const inMonth = (t: number | string | Date) => {
         const d = new Date(t as any);
         const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
@@ -47,29 +46,48 @@ export default function Dashboard() {
     };
 
     const sales = useMemo(
-        () => allSales.filter((x) => x.storeId === id && inMonth(x.created_at)),
-        [allSales, id, month]
-    );
-    const returns = useMemo(
-        () => allReturns.filter((x) => x.storeId === id && inMonth(x.created_at)),
-        [allReturns, id, month]
-    );
-    const receipts = useMemo(
-        () => cash.filter((x) => x.storeId === id && inMonth(x.created_at)),
-        [cash, id, month]
+        () =>
+            allSales.filter(
+                (x) => String(x.storeId) === String(selectedStoreId) && inMonth(x.created_at)
+            ),
+        [allSales, selectedStoreId, month]
     );
 
-    // Lokal fallback totals
-    const localTotalSales = useMemo(() => sales.reduce((a, s) => a + s.price * s.qty, 0), [sales]);
-    const localTotalReturns = useMemo(() => returns.reduce((a, r) => a + r.price * r.qty, 0), [returns]);
-    const localTotalCash = useMemo(() => receipts.reduce((a, r) => a + r.amount, 0), [receipts]);
+    const returns = useMemo(
+        () =>
+            allReturns.filter(
+                (x) => String(x.storeId) === String(selectedStoreId) && inMonth(x.created_at)
+            ),
+        [allReturns, selectedStoreId, month]
+    );
+
+    const receipts = useMemo(
+        () =>
+            cash.filter(
+                (x) => String(x.storeId) === String(selectedStoreId) && inMonth(x.created_at)
+            ),
+        [cash, selectedStoreId, month]
+    );
+
+    const localTotalSales = useMemo(
+        () => sales.reduce((a, s) => a + s.price * s.qty, 0),
+        [sales]
+    );
+    const localTotalReturns = useMemo(
+        () => returns.reduce((a, r) => a + r.price * r.qty, 0),
+        [returns]
+    );
+    const localTotalCash = useMemo(
+        () => receipts.reduce((a, r) => a + r.amount, 0),
+        [receipts]
+    );
     const localDebt = Math.max(localTotalSales - localTotalReturns - localTotalCash, 0);
 
+    const returnsQty = useMemo(
+        () => returns.reduce((a, r) => a + r.qty, 0),
+        [returns]
+    );
 
-    // Vazvrat (miqdor)
-    const returnsQty = useMemo(() => returns.reduce((a, r) => a + r.qty, 0), [returns]);
-
-    // Ranklar
     const salesRank = useMemo(() => {
         const map = new Map<string, { qty: number; total: number }>();
         for (const s of sales) {
@@ -85,9 +103,7 @@ export default function Dashboard() {
 
     const returnRank = useMemo(() => {
         const map = new Map<string, number>();
-        for (const r of returns) {
-            map.set(r.productName, (map.get(r.productName) ?? 0) + r.qty);
-        }
+        for (const r of returns) map.set(r.productName, (map.get(r.productName) ?? 0) + r.qty);
         return Array.from(map.entries())
             .map(([name, qty]) => ({ name, qty }))
             .sort((a, b) => b.qty - a.qty);
@@ -95,16 +111,16 @@ export default function Dashboard() {
 
     const money = (n: number) => `${(n || 0).toLocaleString()} so‘m`;
 
-    // Serverdan monthly_store_summary olish
+    // ---- Summary fetcher
     const fetchSummary = async () => {
-        if (!id) return;
+        if (!selectedStoreId) return;
         setMsLoading(true);
         try {
             const { data, error } = await supabase
                 .from("monthly_store_summary")
                 .select("store_id, ym, total_sales, total_returns, total_cash, delta, debt_raw, debt")
                 .eq("ym", month)
-                .eq("store_id", id)
+                .eq("store_id", selectedStoreId)
                 .maybeSingle();
 
             if (error) setMsRow(null);
@@ -114,56 +130,21 @@ export default function Dashboard() {
         }
     };
 
-    // Dastlabki yuklash va oy/id o'zgarsa yangilash
+    // Month yoki store o‘zgarsa summary-ni yangilaymiz
     useEffect(() => {
         fetchSummary();
-    }, [id, month]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [selectedStoreId, month]);
 
-    // Realtime: JADVALLAR (VIEW emas!) o'zgarsa -> summary qayta o'qilsin
-    useEffect(() => {
-        if (!id) return;
+    // ---- Early return (hooklar yuqorida aniq chaqirildi, xavfsiz)
+    if (!selectedStoreId) {
+        return (
+            <View style={{ padding: 16 }}>
+                <Text style={{ fontWeight: "800" }}>Iltimos, tepada do‘konni tanlang.</Text>
+            </View>
+        );
+    }
 
-        const onAnyChange = () => {
-            // xohlasa: lokal holat ham yangilasin
-            useAppStore.getState().pullNow().catch(() => { });
-            fetchSummary();
-        };
-
-        const chCash = supabase
-            .channel(`rt-cash:${id}`)
-            .on(
-                "postgres_changes",
-                { event: "*", schema: "public", table: "cash_receipts", filter: `store_id=eq.${id}` },
-                onAnyChange
-            )
-            .subscribe();
-
-        const chSales = supabase
-            .channel(`rt-sales:${id}`)
-            .on(
-                "postgres_changes",
-                { event: "*", schema: "public", table: "sales", filter: `store_id=eq.${id}` },
-                onAnyChange
-            )
-            .subscribe();
-
-        const chReturns = supabase
-            .channel(`rt-returns:${id}`)
-            .on(
-                "postgres_changes",
-                { event: "*", schema: "public", table: "returns", filter: `store_id=eq.${id}` },
-                onAnyChange
-            )
-            .subscribe();
-
-        return () => {
-            supabase.removeChannel(chCash);
-            supabase.removeChannel(chSales);
-            supabase.removeChannel(chReturns);
-        };
-    }, [id, month]);
-
-    // PDF export
     const exportPdf = async () => {
         toast.showLoading("Hisobot tayyorlanmoqda…", 0);
         try {
@@ -196,51 +177,21 @@ export default function Dashboard() {
         setMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
     };
 
-    const openPdfExternal = async () => {
-        if (!pdfLink) return;
-        try {
-            const url = encodeURI(pdfLink);
-            await Linking.openURL(url);
-        } catch { }
-    };
-
-    const sharePdf = async () => {
-        if (!pdfLink) return;
-        try {
-            const canShare = await Sharing.isAvailableAsync();
-            if (!canShare) return openPdfExternal();
-            await Sharing.shareAsync(pdfLink, {
-                mimeType: "application/pdf",
-                dialogTitle: pdfName,
-                UTI: "com.adobe.pdf",
-            });
-        } catch { }
-    };
-
-    const openPdfInScreen = () => {
-        if (!pdfLink) return;
-        router.push({
-            pathname: "/(main)/admin/report-viewer",
-            params: { uri: pdfLink, title: pdfName },
-        });
-    };
-
-    // Ko‘rinadigan total’lar (server > lokal)
     const viewTotalSales = msRow?.total_sales ?? localTotalSales;
     const viewTotalReturns = msRow?.total_returns ?? localTotalReturns;
     const viewTotalCash = msRow?.total_cash ?? localTotalCash;
-    const viewDebt = msRow?.debt_raw ?? localDebt; // +/- ko'rinish
+    const viewDebt = msRow?.debt_raw ?? localDebt;
 
     return (
         <>
             <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16 }}>
-                {/* Oy va PDF */}
                 <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 8 }}>
                     <TouchableOpacity onPress={() => shiftMonth(-1)} style={{ padding: 6 }}>
                         <Text style={{ fontWeight: "800" }}>‹</Text>
                     </TouchableOpacity>
                     <Text style={{ fontWeight: "800", fontSize: 16, marginHorizontal: 8 }}>
-                        {month}{msLoading ? " …" : ""}
+                        {month}
+                        {msLoading ? " …" : ""}
                     </Text>
                     <TouchableOpacity onPress={() => shiftMonth(1)} style={{ padding: 6 }}>
                         <Text style={{ fontWeight: "800" }}>›</Text>
@@ -255,7 +206,6 @@ export default function Dashboard() {
                     </TouchableOpacity>
                 </View>
 
-                {/* 2x2 cards */}
                 <View style={{ flexDirection: "row", gap: 12 }}>
                     <View style={{ flex: 1, gap: 12 }}>
                         <StatCard title="Umumiy summa" value={money(viewTotalSales)} />
@@ -267,7 +217,6 @@ export default function Dashboard() {
                     </View>
                 </View>
 
-                {/* Reytinglar */}
                 <View style={{ height: 14 }} />
                 <Text style={{ fontSize: 18, fontWeight: "800", marginBottom: 6 }}>Sotuv reytingi</Text>
                 <RankTableSales rows={salesRank} />
@@ -277,63 +226,15 @@ export default function Dashboard() {
                 <RankTableReturns rows={returnRank} />
             </ScrollView>
 
-            {/* PDF MODAL */}
-            <Modal visible={pdfModalOpen} transparent animationType="fade" onRequestClose={() => setPdfModalOpen(false)}>
-                <Pressable onPress={() => setPdfModalOpen(false)} style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.2)", justifyContent: "center", padding: 24 }}>
-                    <View
-                        style={{
-                            backgroundColor: "#fff",
-                            borderRadius: 16,
-                            borderWidth: 1,
-                            borderColor: "#E9ECF1",
-                            padding: 16,
-                            shadowColor: "#000",
-                            shadowOpacity: 0.12,
-                            shadowRadius: 18,
-                            shadowOffset: { width: 0, height: 10 },
-                            elevation: 6,
-                        }}
-                    >
-                        <Text style={{ fontSize: 18, fontWeight: "900", color: P }}>PDF hisobot tayyor!</Text>
-
-                        <Text style={{ marginTop: 8, color: "#4B5563" }}>
-                            Quyidagi havola — tanlagan davrdagi ({month}) “{storeName || "Do‘kon"}” uchun PDF hisobot.
-                        </Text>
-
-                        <View style={{ marginTop: 12, padding: 12, borderWidth: 1, borderColor: "#E9ECF1", borderRadius: 12, backgroundColor: "#F9FAFB" }}>
-                            <Text style={{ fontWeight: "800" }}>{pdfName}</Text>
-
-                            <TouchableOpacity disabled={!pdfLink} onPress={openPdfExternal} activeOpacity={0.7}>
-                                <Text style={{ color: pdfLink ? "#2563EB" : "#94A3B8", marginTop: 6, textDecorationLine: "underline" }} numberOfLines={2}>
-                                    {String(pdfLink ?? "Havola topilmadi")}
-                                </Text>
-                            </TouchableOpacity>
-                        </View>
-
-                        <View style={{ flexDirection: "row", gap: 10, marginTop: 14, justifyContent: "flex-end" }}>
-                            <TouchableOpacity onPress={() => setPdfModalOpen(false)} style={{ paddingVertical: 12, paddingHorizontal: 16, borderRadius: 12, backgroundColor: "#F3F4F6" }}>
-                                <Text style={{ fontWeight: "800" }}>Yopish</Text>
-                            </TouchableOpacity>
-
-                            <TouchableOpacity
-                                disabled={!pdfLink}
-                                onPress={sharePdf}
-                                style={{ paddingVertical: 12, paddingHorizontal: 16, borderRadius: 12, backgroundColor: pdfLink ? "#10B981" : "#D1D5DB" }}
-                            >
-                                <Text style={{ fontWeight: "800", color: "#fff" }}>Ulashish</Text>
-                            </TouchableOpacity>
-
-                            <TouchableOpacity
-                                disabled={!pdfLink}
-                                onPress={openPdfInScreen}
-                                style={{ paddingVertical: 12, paddingHorizontal: 16, borderRadius: 12, backgroundColor: pdfLink ? P : "#D1D5DB" }}
-                            >
-                                <Text style={{ fontWeight: "800", color: "#fff" }}>Ochish</Text>
-                            </TouchableOpacity>
-                        </View>
-                    </View>
-                </Pressable>
-            </Modal>
+            {/* PDF modal */}
+            <PdfModal
+                open={pdfModalOpen}
+                onClose={() => setPdfModalOpen(false)}
+                pdfLink={pdfLink}
+                pdfName={pdfName}
+                month={month}
+                storeName={storeName}
+            />
 
             <Toast />
         </>
@@ -385,10 +286,115 @@ function RankTableReturns({ rows }: { rows: { name: string; qty: number }[] }) {
         </View>
     );
 }
-function Cell({ label, bold, right, width, flex }: { label: string; bold?: boolean; right?: boolean; width?: number; flex?: boolean }) {
+function Cell({
+    label,
+    bold,
+    right,
+    width,
+    flex,
+}: {
+    label: string;
+    bold?: boolean;
+    right?: boolean;
+    width?: number;
+    flex?: boolean;
+}) {
     return (
-        <View style={{ width, flex: flex ? 1 : undefined, borderRightWidth: 1, borderColor: "#E9ECF1", paddingVertical: 10, paddingHorizontal: 10 }}>
+        <View
+            style={{
+                width,
+                flex: flex ? 1 : undefined,
+                borderRightWidth: 1,
+                borderColor: "#E9ECF1",
+                paddingVertical: 10,
+                paddingHorizontal: 10,
+            }}
+        >
             <Text style={{ fontWeight: bold ? "800" : "400", textAlign: right ? "right" : "left" }}>{label}</Text>
         </View>
+    );
+}
+
+function PdfModal({
+    open,
+    onClose,
+    pdfLink,
+    pdfName,
+    month,
+    storeName,
+}: {
+    open: boolean;
+    onClose: () => void;
+    pdfLink: string | null;
+    pdfName: string;
+    month: string;
+    storeName: string;
+}) {
+    const openPdfExternal = async () => {
+        if (!pdfLink) return;
+        try {
+            const url = encodeURI(pdfLink);
+            await Linking.openURL(url);
+        } catch { }
+    };
+    return (
+        <Modal visible={open} transparent animationType="fade" onRequestClose={onClose}>
+            <Pressable
+                onPress={onClose}
+                style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.2)", justifyContent: "center", padding: 24 }}
+            >
+                <View
+                    style={{
+                        backgroundColor: "#fff",
+                        borderRadius: 16,
+                        borderWidth: 1,
+                        borderColor: "#E9ECF1",
+                        padding: 16,
+                        shadowColor: "#000",
+                        shadowOpacity: 0.12,
+                        shadowRadius: 18,
+                        shadowOffset: { width: 0, height: 10 },
+                        elevation: 6,
+                    }}
+                >
+                    <Text style={{ fontSize: 18, fontWeight: "900", color: P }}>PDF hisobot tayyor!</Text>
+
+                    <Text style={{ marginTop: 8, color: "#4B5563" }}>
+                        Quyidagi havola — tanlagan davrdagi ({month}) “{storeName || "Do‘kon"}” uchun PDF hisobot.
+                    </Text>
+
+                    <View
+                        style={{
+                            marginTop: 12,
+                            padding: 12,
+                            borderWidth: 1,
+                            borderColor: "#E9ECF1",
+                            borderRadius: 12,
+                            backgroundColor: "#F9FAFB",
+                        }}
+                    >
+                        <Text style={{ fontWeight: "800" }}>{pdfName}</Text>
+
+                        <TouchableOpacity disabled={!pdfLink} onPress={openPdfExternal} activeOpacity={0.7}>
+                            <Text
+                                style={{ color: pdfLink ? "#2563EB" : "#94A3B8", marginTop: 6, textDecorationLine: "underline" }}
+                                numberOfLines={2}
+                            >
+                                {String(pdfLink ?? "Havola topilmadi")}
+                            </Text>
+                        </TouchableOpacity>
+                    </View>
+
+                    <View style={{ flexDirection: "row", gap: 10, marginTop: 14, justifyContent: "flex-end" }}>
+                        <TouchableOpacity
+                            onPress={onClose}
+                            style={{ paddingVertical: 12, paddingHorizontal: 16, borderRadius: 12, backgroundColor: "#F3F4F6" }}
+                        >
+                            <Text style={{ fontWeight: "800" }}>Yopish</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </Pressable>
+        </Modal>
     );
 }

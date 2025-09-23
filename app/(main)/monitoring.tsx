@@ -1,12 +1,12 @@
+// app/(main)/monitoring.tsx
 import Toast from "@/components/Toast";
 import { C, Card, H1, H2, Select } from "@/components/UI";
 import { useAppStore } from "@/store/appStore";
 import { useSyncStore } from "@/store/syncStore";
 import { useToastStore } from "@/store/toastStore";
 import { Ionicons } from "@expo/vector-icons";
-import { useLocalSearchParams } from "expo-router";
-import React, { useEffect, useMemo, useState } from "react";
-import { FlatList, Text, TouchableOpacity, View } from "react-native";
+import React, { useMemo, useState } from "react";
+import { FlatList, Modal, Pressable, ScrollView, Text, TextInput, TouchableOpacity, View } from "react-native";
 
 type Tab = "sales" | "returns";
 type EditRow = { id: string; name: string; qty: string; price: string };
@@ -27,7 +27,7 @@ function inSameMonth(ts: number, ym: string) {
 
 type AnyRow = {
     id: string;
-    storeId: string;
+    storeId: string | number;
     created_at: number;
     batchId?: string;
     productName: string;
@@ -46,14 +46,16 @@ function groupByBatch<T extends AnyRow>(rows: T[]): Group<T>[] {
         map.set(key, arr);
     }
     return Array.from(map.entries())
-        .map(([key, items]) => ({ key, created: items[0]?.created_at ?? 0, storeId: items[0]?.storeId ?? "", items }))
+        .map(([key, items]) => ({
+            key,
+            created: items[0]?.created_at ?? 0,
+            storeId: String(items[0]?.storeId ?? ""),
+            items,
+        }))
         .sort((a, b) => b.created - a.created);
 }
 
-export default function History() {
-    const { id } = useLocalSearchParams<{ id: string }>(); // ← ROUTE storeId
-    const routeStoreId = id ? String(id) : undefined;
-
+export default function Monitoring() {
     const stores = useAppStore((s) => s.stores);
     const salesAll = useAppStore((s) => s.sales) as AnyRow[];
     const returnsAll = useAppStore((s) => s.returns) as AnyRow[];
@@ -66,23 +68,21 @@ export default function History() {
     const online = useSyncStore((s) => s.online);
     const pushNow = useAppStore((s) => s.pushNow);
     const pullNow = useAppStore((s) => s.pullNow);
-
     const toast = useToastStore();
 
     const [tab, setTab] = useState<Tab>("sales");
 
-    /** Oylar: faqat ma’lumot bor oylar, va faqat oxirgi 4 oy */
     const monthOpts = useMemo(() => {
         const ymSet = new Set<string>();
         for (const r of salesAll) ymSet.add(toYM(new Date(r.created_at)));
         for (const r of returnsAll) ymSet.add(toYM(new Date(r.created_at)));
         const list = Array.from(ymSet);
         list.sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
-        const last4 = list.slice(0, 4);
-        return last4.map((v) => ({ label: ymLabel(v), value: v }));
+        const last6 = list.slice(0, 6);
+        return last6.map((v) => ({ label: ymLabel(v), value: v }));
     }, [salesAll, returnsAll]);
 
-    const [month, setMonth] = useState<string>(monthOpts[0]?.value);
+    const [month, setMonth] = useState<string>(() => monthOpts[0]?.value ?? toYM(new Date()));
 
     type StoreTypeFilter = "all" | "branch" | "market";
     const [storeType, setStoreType] = useState<StoreTypeFilter>("all");
@@ -92,29 +92,19 @@ export default function History() {
         [stores, storeType]
     );
     const storeOptions = useMemo(
-        () => [{ label: "Барчасi", value: "all" }, ...filteredStores.map((s) => ({ label: s.name, value: s.id }))],
+        () => [{ label: "Барчасi", value: "all" }, ...filteredStores.map((s) => ({ label: s.name, value: String(s.id) }))],
         [filteredStores]
     );
 
-    // ⬇️ DEFAULT NI ROUTE ID GA O‘RNATAMIZ (agar bor bo‘lsa)
     const [storeId, setStoreId] = useState<string>("all");
-    useEffect(() => {
-        if (routeStoreId) {
-            setStoreId(routeStoreId);
-            // Router bo‘yicha kirilganda turi ham mos kelishi uchun:
-            const t = stores.find((s) => s.id === routeStoreId)?.type as StoreTypeFilter | undefined;
-            if (t) setStoreType(t);
-        }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [routeStoreId, stores.length]);
 
     const salesFiltered = useMemo(() => {
         return salesAll
             .filter((x) => (!month || inSameMonth(x.created_at, month)))
             .filter((x) => {
-                if (storeId !== "all") return x.storeId === storeId;
+                if (storeId !== "all") return String(x.storeId) === storeId;
                 if (storeType === "all") return true;
-                const st = stores.find((s) => s.id === x.storeId)?.type;
+                const st = stores.find((s) => String(s.id) === String(x.storeId))?.type;
                 return st === storeType;
             })
             .sort((a, b) => b.created_at - a.created_at);
@@ -124,9 +114,9 @@ export default function History() {
         return returnsAll
             .filter((x) => (!month || inSameMonth(x.created_at, month)))
             .filter((x) => {
-                if (storeId !== "all") return x.storeId === storeId;
+                if (storeId !== "all") return String(x.storeId) === storeId;
                 if (storeType === "all") return true;
-                const st = stores.find((s) => s.id === x.storeId)?.type;
+                const st = stores.find((s) => String(s.id) === String(x.storeId))?.type;
                 return st === storeType;
             })
             .sort((a, b) => b.created_at - a.created_at);
@@ -164,6 +154,12 @@ export default function History() {
         setEditRows(rows);
     };
 
+    const toastHideSafely = () => {
+        try {
+            toast.hide();
+        } catch { }
+    };
+
     const saveGroup = async () => {
         if (online) toast.showLoading("Saqlanmoqda…");
         else toast.showLoading("Offline: navbatga yozildi");
@@ -174,9 +170,14 @@ export default function History() {
             else if (editType === "returns") await updateReturn(r.id, { qty, price });
         }
         if (online) {
-            try { await pushNow(); } catch { }
-            try { await pullNow(); } catch { }
+            try {
+                await pushNow();
+            } catch { }
+            try {
+                await pullNow();
+            } catch { }
         }
+        toastHideSafely();
         setOpenKey(null);
         setEditType(null);
     };
@@ -188,12 +189,17 @@ export default function History() {
         else if (editType === "returns") await removeReturn(rowId);
         setEditRows((rows) => rows.filter((r) => r.id !== rowId));
         if (online) {
-            try { await pushNow(); } catch { }
-            try { await pullNow(); } catch { }
+            try {
+                await pushNow();
+            } catch { }
+            try {
+                await pullNow();
+            } catch { }
         }
+        toastHideSafely();
     };
     const removeRowFromGroup = async (rowId: string) => {
-        askConfirm("Haqiqatan ham ushbu qatorni o‘chirmoqchimisiz?", () => _removeRowFromGroup(rowId));
+        askConfirm("Ushbu qatorni o‘chirishni tasdiqlaysizmi?", () => _removeRowFromGroup(rowId));
     };
 
     const _removeWholeGroup = async (type: Tab, key: string) => {
@@ -206,16 +212,21 @@ export default function History() {
             else await removeReturn(row.id);
         }
         if (online) {
-            try { await pushNow(); } catch { }
-            try { await pullNow(); } catch { }
+            try {
+                await pushNow();
+            } catch { }
+            try {
+                await pullNow();
+            } catch { }
         }
+        toastHideSafely();
     };
     const removeWholeGroup = async (type: Tab, key: string) => {
-        askConfirm("Haqiqatan ham butun paketni o‘chirmoqchimisiz?", () => _removeWholeGroup(type, key));
+        askConfirm("Butun paketni o‘chirishni tasdiqlaysizmi?", () => _removeWholeGroup(type, key));
     };
 
     const money = (n: number) => (n || 0).toLocaleString() + " so‘m";
-    const getStoreName = (sid: string) => stores.find((s) => s.id === sid)?.name ?? "—";
+    const getStoreName = (sid: string) => stores.find((s) => String(s.id) === sid)?.name ?? "—";
 
     const GroupCard = ({ g, type }: { g: Group<AnyRow>; type: Tab }) => {
         const total = g.items.reduce((a: number, r: AnyRow) => a + r.qty * r.price, 0);
@@ -284,7 +295,7 @@ export default function History() {
     return (
         <>
             <View style={{ flex: 1, padding: 16 }}>
-                <H1>Тарих</H1>
+                <H1>Мониторинг</H1>
 
                 <View style={{ flexDirection: "row", gap: 8, marginTop: 10 }}>
                     <TouchableOpacity onPress={() => setTab("sales")} style={{ flex: 1 }}>
@@ -298,7 +309,7 @@ export default function History() {
                                 alignItems: "center",
                             }}
                         >
-                            <Text style={{ fontWeight: "800", color: tab === "sales" ? C.primary : C.text }}>Сотув тарихи</Text>
+                            <Text style={{ fontWeight: "800", color: tab === "sales" ? C.primary : C.text }}>Сотувлар</Text>
                         </View>
                     </TouchableOpacity>
                     <TouchableOpacity onPress={() => setTab("returns")} style={{ flex: 1 }}>
@@ -312,14 +323,19 @@ export default function History() {
                                 alignItems: "center",
                             }}
                         >
-                            <Text style={{ fontWeight: "800", color: tab === "returns" ? C.primary : C.text }}>Қайтариш тарихи</Text>
+                            <Text style={{ fontWeight: "800", color: tab === "returns" ? C.primary : C.text }}>Қайтаришлар</Text>
                         </View>
                     </TouchableOpacity>
                 </View>
 
                 <View style={{ marginTop: 12 }}>
                     <H2>Ой бўйича фильтр</H2>
-                    <Select value={month} onChange={setMonth} options={monthOpts} style={{ marginTop: 6 }} />
+                    <Select
+                        value={month}
+                        onChange={setMonth}
+                        options={monthOpts.length ? monthOpts : [{ label: ymLabel(toYM(new Date())), value: toYM(new Date()) }]}
+                        style={{ marginTop: 6 }}
+                    />
                 </View>
 
                 <View style={{ marginTop: 12, flexDirection: "row", gap: 8 }}>
@@ -329,25 +345,19 @@ export default function History() {
                             value={storeType}
                             onChange={(v: string) => {
                                 setStoreType(v as any);
-                                // Route bilan kelingan bo‘lsa, storeId ni ushlab tursin:
-                                if (!routeStoreId) setStoreId("all");
+                                setStoreId("all");
                             }}
                             options={[
                                 { label: "Барчасi", value: "all" },
                                 { label: "Филиаллар", value: "branch" },
-                                { label: "Дўконлар", value: "market" },
+                                { label: "Дўконlar", value: "market" },
                             ]}
                             style={{ marginTop: 6 }}
                         />
                     </View>
                     <View style={{ flex: 1 }}>
                         <H2>Филиал/Дўкон</H2>
-                        <Select
-                            value={storeId}
-                            onChange={setStoreId}
-                            options={storeOptions}
-                            style={{ marginTop: 6 }}
-                        />
+                        <Select value={storeId} onChange={setStoreId} options={storeOptions} style={{ marginTop: 6 }} />
                     </View>
                 </View>
 
@@ -376,10 +386,154 @@ export default function History() {
                         contentContainerStyle={{ paddingBottom: 24 }}
                     />
                 )}
-
-                {/* Edit va Confirm modallari – o‘zgarmadi */}
-                {/* ... (qolgan modallar aynan siz yuborganidek) ... */}
             </View>
+
+            {/* EDIT MODAL */}
+            <Modal
+                visible={!!openKey}
+                transparent
+                animationType="fade"
+                onRequestClose={() => { setOpenKey(null); setEditType(null); }}
+            >
+                {/* Overlay — bosilsa yopiladi */}
+                <Pressable
+                    onPress={() => { setOpenKey(null); setEditType(null); }}
+                    style={{
+                        flex: 1,
+                        backgroundColor: "rgba(0,0,0,0.2)",
+                        justifyContent: "center",
+                        alignItems: "center",        // markazga
+                        padding: 16,
+                    }}
+                >
+                    {/* Ichki container — bosilganda yopilmasin */}
+                    <Pressable
+                        onPress={() => { }}
+                        style={{
+                            backgroundColor: "#fff",
+                            borderRadius: 16,
+                            borderWidth: 1,
+                            borderColor: "#E9ECF1",
+                            padding: 14,
+                            alignSelf: "stretch",       // ekranni bo‘ylab
+                            marginHorizontal: 8,
+                            maxHeight: "85%",           // balandlik cheklovi
+                            flexShrink: 1,              // kichrayishga ruxsat
+                        }}
+                    >
+                        <Text style={{ fontSize: 18, fontWeight: "900", color: "#111" }}>
+                            Paketni tahrirlash ({editType === "sales" ? "Сотув" : "Қайтариш"})
+                        </Text>
+
+                        {/* SKROLL QILINADIGAN QISM */}
+                        <ScrollView
+                            style={{ marginTop: 10 }}
+                            contentContainerStyle={{ paddingBottom: 12 }}
+                            keyboardShouldPersistTaps="handled"
+                            nestedScrollEnabled           // Android’da ichki skroll
+                            showsVerticalScrollIndicator
+                        >
+                            {editRows.map((r) => (
+                                <View
+                                    key={r.id}
+                                    style={{ borderTopWidth: 1, borderColor: "#F0F0F0", paddingTop: 10, marginTop: 10 }}
+                                >
+                                    <Text style={{ fontWeight: "800" }}>{r.name}</Text>
+                                    <View style={{ flexDirection: "row", gap: 8, marginTop: 6 }}>
+                                        <TextInput
+                                            value={r.qty}
+                                            onChangeText={(v) =>
+                                                setEditRows((rows) => rows.map((x) => (x.id === r.id ? { ...x, qty: v } : x)))
+                                            }
+                                            keyboardType="numeric"
+                                            placeholder="Miqdor"
+                                            style={{ flex: 1, borderWidth: 1, borderColor: "#E9ECF1", borderRadius: 10, padding: 10 }}
+                                        />
+                                        <TextInput
+                                            value={r.price}
+                                            onChangeText={(v) =>
+                                                setEditRows((rows) => rows.map((x) => (x.id === r.id ? { ...x, price: v } : x)))
+                                            }
+                                            keyboardType="numeric"
+                                            placeholder="Narx"
+                                            style={{ flex: 1, borderWidth: 1, borderColor: "#E9ECF1", borderRadius: 10, padding: 10 }}
+                                        />
+                                        <TouchableOpacity
+                                            onPress={() => removeRowFromGroup(r.id)}
+                                            style={{
+                                                width: 40, height: 40, borderRadius: 12, backgroundColor: "#FCE9EA",
+                                                borderWidth: 1, borderColor: "#F4C7CB", alignItems: "center", justifyContent: "center",
+                                            }}
+                                        >
+                                            <Ionicons name="trash-outline" size={18} color="#E23D3D" />
+                                        </TouchableOpacity>
+                                    </View>
+                                </View>
+                            ))}
+                            {editRows.length === 0 && (
+                                <Text style={{ color: C.muted, marginTop: 8 }}>Qator qolmadi.</Text>
+                            )}
+                        </ScrollView>
+
+                        {/* FOOTER — doim ko‘rinsin */}
+                        <View style={{ flexDirection: "row", gap: 10, marginTop: 8, justifyContent: "flex-end" }}>
+                            <TouchableOpacity
+                                onPress={() => { setOpenKey(null); setEditType(null); }}
+                                style={{ paddingVertical: 12, paddingHorizontal: 16, borderRadius: 12, backgroundColor: "#F3F4F6" }}
+                            >
+                                <Text style={{ fontWeight: "800" }}>Bekor</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                disabled={editRows.length === 0}
+                                onPress={saveGroup}
+                                style={{
+                                    paddingVertical: 12, paddingHorizontal: 16, borderRadius: 12,
+                                    backgroundColor: editRows.length ? "#770E13" : "#D1D5DB",
+                                }}
+                            >
+                                <Text style={{ fontWeight: "800", color: "#fff" }}>Saqlash</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </Pressable>
+                </Pressable>
+            </Modal>
+
+            {/* CONFIRM MODAL */}
+            <Modal visible={confirmVisible} transparent animationType="fade" onRequestClose={() => setConfirmVisible(false)}>
+                <Pressable
+                    onPress={() => setConfirmVisible(false)}
+                    style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.2)", justifyContent: "center", padding: 24 }}
+                >
+                    <Pressable
+                        onPress={() => { }}
+                        style={{
+                            backgroundColor: "#fff",
+                            borderRadius: 16,
+                            borderWidth: 1,
+                            borderColor: "#E9ECF1",
+                            padding: 16,
+                            maxWidth: 520,
+                            alignSelf: "center",
+                        }}
+                    >
+                        <Text style={{ fontSize: 16, fontWeight: "800" }}>{confirmText}</Text>
+                        <View style={{ flexDirection: "row", gap: 10, marginTop: 14, justifyContent: "flex-end" }}>
+                            <TouchableOpacity
+                                onPress={() => setConfirmVisible(false)}
+                                style={{ paddingVertical: 12, paddingHorizontal: 16, borderRadius: 12, backgroundColor: "#F3F4F6" }}
+                            >
+                                <Text style={{ fontWeight: "800" }}>Bekor</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                onPress={runConfirm}
+                                style={{ paddingVertical: 12, paddingHorizontal: 16, borderRadius: 12, backgroundColor: "#EF4444" }}
+                            >
+                                <Text style={{ fontWeight: "800", color: "#fff" }}>Ha, o‘chirish</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </Pressable>
+                </Pressable>
+            </Modal>
 
             <Toast />
         </>
