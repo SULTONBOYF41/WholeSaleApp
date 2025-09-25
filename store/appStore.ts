@@ -156,18 +156,38 @@ export const useAppStore = create<AppState>()((set, get) => ({
     },
 
     async addSale(s) {
-        const item: Sale = { id: `sa-${uid()}`, created_at: Date.now(), ...s };
+        const storeName =
+            (get().stores.find(st => String(st.id) === String(s.storeId))?.name) ?? undefined;
+
+        const item: Sale = {
+            id: `sa-${uid()}`,
+            created_at: Date.now(),
+            storeName,                 // <— qo‘shildi
+            ...s
+        };
+
         const arr = [...get().sales, item];
         set({ sales: arr }); await setJSON(K.SALES, arr);
+
         const q = { id: `q-${uid()}`, type: "sale_create", payload: item };
         const qq = [...get().queue, q]; set({ queue: qq }); await setJSON(K.QUEUE, qq);
         get().schedulePush();
     },
 
     async addReturn(r) {
-        const item: Ret = { id: `rt-${uid()}`, created_at: Date.now(), ...r };
+        const storeName =
+            (get().stores.find(st => String(st.id) === String(r.storeId))?.name) ?? undefined;
+
+        const item: Ret = {
+            id: `rt-${uid()}`,
+            created_at: Date.now(),
+            storeName,                 // <— qo‘shildi
+            ...r
+        };
+
         const arr = [...get().returns, item];
         set({ returns: arr }); await setJSON(K.RETURNS, arr);
+
         const q = { id: `q-${uid()}`, type: "return_create", payload: item };
         const qq = [...get().queue, q]; set({ queue: qq }); await setJSON(K.QUEUE, qq);
         get().schedulePush();
@@ -336,10 +356,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
                     // ---------------- SALES ----------------
                 } else if (it.type === "sale_create") {
                     const s = it.payload as Sale;
-                    await ensureStore(s.storeId);
                     const { error } = await supabase.from("sales").insert({
                         id: s.id,
                         store_id: s.storeId,
+                        store_name: s.storeName ?? null,   // <— YANGI
                         product_name: s.productName,
                         qty: s.qty,
                         unit: s.unit,
@@ -348,6 +368,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
                         created_at: new Date(s.created_at).toISOString(),
                     });
                     if (error) throw error;
+
                 } else if (it.type === "sale_update") {
                     const { id, qty, price } = it.payload as { id: string; qty: number; price: number };
                     const { error } = await supabase.from("sales").update({ qty, price }).eq("id", id);
@@ -360,10 +381,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
                     // ---------------- RETURNS ----------------
                 } else if (it.type === "return_create") {
                     const r = it.payload as Ret;
-                    await ensureStore(r.storeId);
                     const { error } = await supabase.from("returns").insert({
                         id: r.id,
                         store_id: r.storeId,
+                        store_name: r.storeName ?? null,   // <— YANGI
                         product_name: r.productName,
                         qty: r.qty,
                         unit: r.unit,
@@ -521,6 +542,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
             const fromServer = sa.data.map((x: any) => ({
                 id: x.id,
                 storeId: x.store_id,
+                storeName: x.store_name ?? undefined,  // <— YANGI
                 productName: x.product_name,
                 qty: x.qty,
                 unit: x.unit,
@@ -549,6 +571,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
             const fromServer = re.data.map((x: any) => ({
                 id: x.id,
                 storeId: x.store_id,
+                storeName: x.store_name ?? undefined,  // <— YANGI
                 productName: x.product_name,
                 qty: x.qty,
                 unit: x.unit,

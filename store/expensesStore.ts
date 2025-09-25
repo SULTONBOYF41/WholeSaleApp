@@ -4,19 +4,20 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import NetInfo from "@react-native-community/netinfo";
 import { create } from "zustand";
 
+/** --- TURLAR --- */
 export type ExpenseKind = "family" | "shop" | "bank";
 
 export interface Expense {
-    id: string;
-    batch_id: string;
+    id: string;            // db id (uuid)
+    batch_id: string;      // bir paketning ID'si
     kind: ExpenseKind;
     title: string;
     qty: number | null;
     price: number | null;
-    amount: number;
+    amount: number;        // qty * price (serverda ham hisoblanadi)
     note?: string | null;
-    created_at: string;
-    client_id?: string | null;
+    created_at: string;    // ISO
+    client_id?: string | null; // upsert onConflict uchun UQ
 }
 
 export type RowInput = { title: string; qty: number; price: number; note?: string };
@@ -42,7 +43,8 @@ interface ExpensesState {
     loading: boolean;
     syncing: boolean;
     online: boolean;
-    items: Expense[];
+
+    items: Expense[]; // flatten qatorlar
     batchesByKind: Record<ExpenseKind, ExpenseBatch[]>;
     totals: Totals;
 
@@ -57,6 +59,7 @@ interface ExpensesState {
     _flushQueue: () => Promise<void>;
 }
 
+/** --- ICHKI YORDAMChILAR --- */
 const QKEY = "expenses_queue_v1";
 let NET_LISTENER_SET = false;
 let REALTIME_SET = false;
@@ -64,10 +67,17 @@ let REFRESH_TIMER: any = null;
 let QUEUE_DRAINER: any = null;
 
 function uuidLike() {
-    const rnd = (len: number) => Array.from({ length: len }, () => Math.floor(Math.random() * 16).toString(16)).join("");
+    const rnd = (len: number) =>
+        Array.from({ length: len }, () => Math.floor(Math.random() * 16).toString(16)).join("");
     return `${rnd(8)}-${rnd(4)}-${rnd(4)}-${rnd(4)}-${rnd(12)}`;
 }
-function fixNum(n: any): number { const v = Number(n); return Number.isFinite(v) ? v : 0; }
+function fixNum(n: any): number {
+    const v = Number(n);
+    return Number.isFinite(v) ? v : 0;
+}
+function logDbError(tag: string, error: any) {
+    console.error(`[expenses:${tag}]`, error?.message || error);
+}
 
 async function pushOp(op: QueueItem) {
     const raw = (await AsyncStorage.getItem(QKEY)) ?? "[]";
@@ -75,22 +85,42 @@ async function pushOp(op: QueueItem) {
     arr.push(op);
     await AsyncStorage.setItem(QKEY, JSON.stringify(arr));
 }
-async function getQueueCount(): Promise<number> {
+async function readQueue(): Promise<QueueItem[]> {
     const raw = (await AsyncStorage.getItem(QKEY)) ?? "[]";
-    try { return (JSON.parse(raw) as any[]).length; } catch { return 0; }
+    try {
+        return JSON.parse(raw) as QueueItem[];
+    } catch {
+        return [];
+    }
+}
+async function writeQueue(arr: QueueItem[]) {
+    await AsyncStorage.setItem(QKEY, JSON.stringify(arr));
+}
+async function getQueueCount(): Promise<number> {
+    return (await readQueue()).length;
 }
 
 function groupBatches(items: Expense[]): Record<ExpenseKind, ExpenseBatch[]> {
     const map = new Map<string, ExpenseBatch>();
     for (const it of items) {
         if (!map.has(it.batch_id)) {
-            map.set(it.batch_id, { id: it.batch_id, kind: it.kind, created_at: it.created_at, total: 0, items: [] });
+            map.set(it.batch_id, {
+                id: it.batch_id,
+                kind: it.kind,
+                created_at: it.created_at,
+                total: 0,
+                items: [],
+            });
         }
         const b = map.get(it.batch_id)!;
         b.items.push(it);
+
+        // serverdan kelgan amount bo'lsa shuni ustuvor olamiz, bo'lmasa qty*price:
         const a = fixNum(it.amount ?? fixNum(it.qty) * fixNum(it.price));
         b.total += a;
-        if (new Date(it.created_at) < new Date(b.created_at)) b.created_at = it.created_at;
+
+        // batch created_at — eng erta vaqt bo‘lsin
+        if (+new Date(it.created_at) < +new Date(b.created_at)) b.created_at = it.created_at;
     }
     const byKind: Record<ExpenseKind, ExpenseBatch[]> = { family: [], shop: [], bank: [] };
     for (const b of map.values()) byKind[b.kind].push(b);
@@ -112,10 +142,12 @@ function recompute(items: Expense[]) {
     return { items, batchesByKind, totals };
 }
 
+/** --- STORE --- */
 export const useExpensesStore = create<ExpensesState>((set, get) => ({
     loading: false,
     syncing: false,
     online: true,
+
     items: [],
     batchesByKind: { family: [], shop: [], bank: [] },
     totals: { family: 0, shop: 0, bank: 0, all: 0, total: 0 },
@@ -124,49 +156,65 @@ export const useExpensesStore = create<ExpensesState>((set, get) => ({
         if (NET_LISTENER_SET) return;
         NET_LISTENER_SET = true;
         NetInfo.addEventListener(async (state) => {
-            // devda isInternetReachable null bo'lsa ham isConnected asosiy
-            const online = !!state.isConnected && (state.isInternetReachable !== false);
+            const online = !!state.isConnected && state.isInternetReachable !== false;
             set({ online });
             if (online) {
-                await get()._flushQueue();
-                await get().fetchAll();
+                try {
+                    await get()._flushQueue();
+                } catch { }
+                try {
+                    await get().fetchAll();
+                } catch { }
             }
         });
     },
 
     _ensureRealtime: () => {
-        if (REALTIME_SET) {
-            return;
+        if (!REALTIME_SET) {
+            REALTIME_SET = true;
+            supabase
+                .channel("public:expenses")
+                .on(
+                    "postgres_changes",
+                    { event: "*", schema: "public", table: "expenses" },
+                    () => {
+                        // kichik debounce
+                        if (REFRESH_TIMER) clearTimeout(REFRESH_TIMER);
+                        REFRESH_TIMER = setTimeout(() => {
+                            get()
+                                .fetchAll()
+                                .catch(() => { });
+                        }, 400);
+                    }
+                )
+                .subscribe();
         }
-        REALTIME_SET = true;
-        supabase
-            .channel("public:expenses")
-            .on("postgres_changes", { event: "*", schema: "public", table: "expenses" }, () => {
-                if (REFRESH_TIMER) clearTimeout(REFRESH_TIMER);
-                REFRESH_TIMER = setTimeout(() => { get().fetchAll().catch(() => { }); }, 400);
-            })
-            .subscribe();
 
         if (!QUEUE_DRAINER) {
             QUEUE_DRAINER = setInterval(async () => {
                 const st = get();
                 if (!st.online) return;
                 const qn = await getQueueCount();
-                if (qn > 0) st._flushQueue().catch(() => { });
+                if (qn > 0) {
+                    st._flushQueue().catch(() => { });
+                }
             }, 10000);
         }
     },
 
     _flushQueue: async () => {
-        const raw = (await AsyncStorage.getItem(QKEY)) ?? "[]";
-        const arr = JSON.parse(raw) as QueueItem[];
+        const arr = await readQueue();
         if (!arr.length) return;
         set({ syncing: true });
         try {
             for (const q of arr) {
                 if (q.op === "add" || q.op === "edit") {
                     if (q.op === "edit") {
-                        await supabase.from("expenses").delete().eq("batch_id", q.batch_id);
+                        const del = await supabase.from("expenses").delete().eq("batch_id", q.batch_id);
+                        if (del.error) {
+                            logDbError("flush.edit.delete", del.error);
+                            continue; // keyingisiga o‘tamiz (queue tozalashni to‘xtatmaymiz)
+                        }
                     }
                     const rowsFixed = q.rows.map((r) => ({
                         ...r,
@@ -184,12 +232,14 @@ export const useExpensesStore = create<ExpensesState>((set, get) => ({
                         note: r.note ?? null,
                         created_at: r.created_at!,
                     }));
-                    await supabase.from("expenses").upsert(payload, { onConflict: "client_id" });
+                    const ins = await supabase.from("expenses").upsert(payload, { onConflict: "client_id" }).select();
+                    if (ins.error) logDbError("flush.upsert", ins.error);
                 } else if (q.op === "delete") {
-                    await supabase.from("expenses").delete().eq("batch_id", q.batch_id);
+                    const del = await supabase.from("expenses").delete().eq("batch_id", q.batch_id);
+                    if (del.error) logDbError("flush.delete", del.error);
                 }
             }
-            await AsyncStorage.setItem(QKEY, "[]");
+            await writeQueue([]); // tozalaymiz
         } finally {
             set({ syncing: false });
         }
@@ -198,8 +248,12 @@ export const useExpensesStore = create<ExpensesState>((set, get) => ({
     fetchAll: async () => {
         get()._ensureNetListener();
         get()._ensureRealtime();
-        // 👉 offline’da tarmoqqa urilmaymiz
-        if (!get().online) { set({ loading: false }); return; }
+
+        // offline’da serverga urilmaymiz, lekin loading false qilamiz
+        if (!get().online) {
+            set({ loading: false });
+            return;
+        }
 
         set({ loading: true });
         const { data, error } = await supabase
@@ -207,11 +261,14 @@ export const useExpensesStore = create<ExpensesState>((set, get) => ({
             .select("id,batch_id,kind,title,qty,price,amount,note,created_at,client_id")
             .order("created_at", { ascending: false });
 
-        if (error || !data) { set({ loading: false }); return; }
+        if (error || !data) {
+            if (error) logDbError("fetchAll", error);
+            set({ loading: false });
+            return;
+        }
 
         const items = data as Expense[];
-        const next = recompute(items);
-        set({ ...next, loading: false });
+        set({ ...recompute(items), loading: false });
     },
 
     addBatch: async (kind, rows) => {
@@ -229,30 +286,32 @@ export const useExpensesStore = create<ExpensesState>((set, get) => ({
         }));
 
         if (!get().online) {
-            // 👉 offline: queue + optimistik lokal yangilash
+            // offline: queue + optimistik
             await pushOp({ op: "add", kind, rows: queuedRows, batch_id });
             const newItems: Expense[] = [
                 ...get().items,
                 ...queuedRows.map((r) => ({
                     id: uuidLike(),
                     client_id: r.client_id!,
-                    batch_id, kind,
+                    batch_id,
+                    kind,
                     title: r.title,
-                    qty: r.qty, price: r.price,
+                    qty: r.qty,
+                    price: r.price,
                     amount: r.qty * r.price,
                     note: r.note ?? null,
                     created_at: r.created_at!,
                 })),
             ];
-            const next = recompute(newItems);
-            set(next);
+            set(recompute(newItems));
             return batch_id;
         }
 
         // online: bevosita upsert
         const payload = queuedRows.map((r) => ({
             client_id: r.client_id!,
-            batch_id, kind,
+            batch_id,
+            kind,
             title: r.title,
             qty: r.qty,
             price: r.price,
@@ -260,19 +319,17 @@ export const useExpensesStore = create<ExpensesState>((set, get) => ({
             note: r.note ?? null,
             created_at: r.created_at!,
         }));
-        const { error } = await supabase.from("expenses").upsert(payload, { onConflict: "client_id" });
-        if (error) {
+
+        const ins = await supabase.from("expenses").upsert(payload, { onConflict: "client_id" }).select();
+        if (ins.error) {
+            logDbError("addBatch.upsert", ins.error);
             // fallback: queue + optimistik
             await pushOp({ op: "add", kind, rows: queuedRows, batch_id });
             const newItems = [
                 ...get().items,
-                ...payload.map((p) => ({
-                    ...p,
-                    id: uuidLike(),
-                } as Expense)),
+                ...payload.map((p) => ({ ...p, id: uuidLike() } as Expense)),
             ];
-            const next = recompute(newItems);
-            set(next);
+            set(recompute(newItems));
         } else {
             await get().fetchAll();
         }
@@ -297,33 +354,59 @@ export const useExpensesStore = create<ExpensesState>((set, get) => ({
             const added = queuedRows.map<Expense>((r) => ({
                 id: uuidLike(),
                 client_id: r.client_id!,
-                batch_id, kind,
+                batch_id,
+                kind,
                 title: r.title,
-                qty: r.qty, price: r.price,
+                qty: r.qty,
+                price: r.price,
                 amount: r.qty * r.price,
                 note: r.note ?? null,
                 created_at: r.created_at!,
             }));
-            const next = recompute([...filtered, ...added]);
-            set(next);
+            set(recompute([...filtered, ...added]));
             return;
         }
 
-        await supabase.from("expenses").delete().eq("batch_id", batch_id);
+        const del = await supabase.from("expenses").delete().eq("batch_id", batch_id);
+        if (del.error) {
+            logDbError("editBatch.delete", del.error);
+            // fallback: queue + optimistik
+            await pushOp({ op: "edit", kind, rows: queuedRows, batch_id });
+            const filtered = get().items.filter((x) => x.batch_id !== batch_id);
+            const added = queuedRows.map<Expense>((r) => ({
+                id: uuidLike(),
+                client_id: r.client_id!,
+                batch_id,
+                kind,
+                title: r.title,
+                qty: r.qty,
+                price: r.price,
+                amount: r.qty * r.price,
+                note: r.note ?? null,
+                created_at: r.created_at!,
+            }));
+            set(recompute([...filtered, ...added]));
+            return;
+        }
+
         const payload = queuedRows.map((r) => ({
             client_id: r.client_id!,
-            batch_id, kind,
-            title: r.title, qty: r.qty, price: r.price,
-            amount: r.qty * r.price, note: r.note ?? null,
+            batch_id,
+            kind,
+            title: r.title,
+            qty: r.qty,
+            price: r.price,
+            amount: r.qty * r.price,
+            note: r.note ?? null,
             created_at: r.created_at!,
         }));
-        const { error } = await supabase.from("expenses").upsert(payload, { onConflict: "client_id" });
-        if (error) {
+        const ins = await supabase.from("expenses").upsert(payload, { onConflict: "client_id" }).select();
+        if (ins.error) {
+            logDbError("editBatch.upsert", ins.error);
             await pushOp({ op: "edit", kind, rows: queuedRows, batch_id });
             const filtered = get().items.filter((x) => x.batch_id !== batch_id);
             const added = payload.map<Expense>((p) => ({ ...p, id: uuidLike() } as Expense));
-            const next = recompute([...filtered, ...added]);
-            set(next);
+            set(recompute([...filtered, ...added]));
         } else {
             await get().fetchAll();
         }
@@ -333,17 +416,16 @@ export const useExpensesStore = create<ExpensesState>((set, get) => ({
         if (!get().online) {
             await pushOp({ op: "delete", batch_id });
             const filtered = get().items.filter((x) => x.batch_id !== batch_id);
-            const next = recompute(filtered);
-            set(next);
+            set(recompute(filtered));
             return;
         }
 
-        const { error } = await supabase.from("expenses").delete().eq("batch_id", batch_id);
-        if (error) {
+        const del = await supabase.from("expenses").delete().eq("batch_id", batch_id).select();
+        if (del.error) {
+            logDbError("deleteBatch", del.error);
             await pushOp({ op: "delete", batch_id });
             const filtered = get().items.filter((x) => x.batch_id !== batch_id);
-            const next = recompute(filtered);
-            set(next);
+            set(recompute(filtered));
         } else {
             await get().fetchAll();
         }

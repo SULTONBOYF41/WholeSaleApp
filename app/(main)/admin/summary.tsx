@@ -53,7 +53,7 @@ export default function SummaryScreen() {
 
     // Oy tanlov
     const monthOpts = useMemo(() => monthOptions(24), []);
-    const [month, setMonth] = useState(monthOpts[0]?.value);
+    const [month, setMonth] = useState<string>(monthOpts[0]?.value!);
 
     // Serverdan MSS
     const [mss, setMss] = useState<MSSRow[]>([]);
@@ -74,7 +74,10 @@ export default function SummaryScreen() {
 
             if (!error && (data?.length ?? 0) === 0) {
                 await supabase.rpc("recompute_monthly_summary", { _ym: ym });
-                const second = await supabase.from("monthly_store_summary").select("*").eq("ym", ym);
+                const second = await supabase
+                    .from("monthly_store_summary")
+                    .select("*")
+                    .eq("ym", ym);
                 data = second.data ?? [];
             }
             setMss((data ?? []) as MSSRow[]);
@@ -92,7 +95,9 @@ export default function SummaryScreen() {
     // Realtime: EXPENSES → local expenses yangilash (oy bo‘yicha)
     useEffect(() => {
         if (chExpensesRef.current) {
-            try { supabase.removeChannel(chExpensesRef.current as any); } catch { }
+            try {
+                supabase.removeChannel(chExpensesRef.current as any);
+            } catch { }
             chExpensesRef.current = null;
         }
 
@@ -118,7 +123,9 @@ export default function SummaryScreen() {
         chExpensesRef.current = ch;
         return () => {
             if (chExpensesRef.current) {
-                try { supabase.removeChannel(chExpensesRef.current as any); } catch { }
+                try {
+                    supabase.removeChannel(chExpensesRef.current as any);
+                } catch { }
                 chExpensesRef.current = null;
             }
         };
@@ -127,7 +134,9 @@ export default function SummaryScreen() {
     // Realtime: MONTHLY_STORE_SUMMARY → jadvalni qayta yuklash
     useEffect(() => {
         if (chMssRef.current) {
-            try { supabase.removeChannel(chMssRef.current as any); } catch { }
+            try {
+                supabase.removeChannel(chMssRef.current as any);
+            } catch { }
             chMssRef.current = null;
         }
 
@@ -135,7 +144,12 @@ export default function SummaryScreen() {
             .channel(`mss-realtime-${month}`)
             .on(
                 "postgres_changes",
-                { event: "*", schema: "public", table: "monthly_store_summary", filter: `ym=eq.${month}` },
+                {
+                    event: "*",
+                    schema: "public",
+                    table: "monthly_store_summary",
+                    filter: `ym=eq.${month}`,
+                },
                 () => fetchMssForMonth(month)
             )
             .subscribe();
@@ -143,7 +157,9 @@ export default function SummaryScreen() {
         chMssRef.current = ch;
         return () => {
             if (chMssRef.current) {
-                try { supabase.removeChannel(chMssRef.current as any); } catch { }
+                try {
+                    supabase.removeChannel(chMssRef.current as any);
+                } catch { }
                 chMssRef.current = null;
             }
         };
@@ -160,11 +176,11 @@ export default function SummaryScreen() {
     };
 
     const rows: Row[] = useMemo(() => {
-        const nameById = new Map(stores.map((s) => [s.id, s.name]));
+        const nameById = new Map(stores.map((s) => [String(s.id), s.name]));
         return (mss || [])
             .map((r) => ({
                 storeId: r.store_id,
-                storeName: nameById.get(r.store_id) ?? "—",
+                storeName: nameById.get(String(r.store_id)) ?? "—",
                 totalSales: Number(r.total_sales || 0),
                 totalReturns: Number(r.total_returns || 0),
                 totalCash: Number(r.total_cash || 0),
@@ -173,12 +189,19 @@ export default function SummaryScreen() {
             .sort((a, b) => a.storeName.localeCompare(b.storeName));
     }, [mss, stores]);
 
-    // Global expenses (clientdan)
+    // --- Faqat do‘kon (shop/market) xarajatlari — clientdan, tanlangan oy bo‘yicha
     const sumExpensesMonth = useMemo(() => {
         let s = 0;
         for (const e of expenses) {
             if (!inMonth(e.created_at, month)) continue;
-            s += Number(e.amount || 0);
+
+            // faqat kind='shop' bo‘lsin
+            const kind = String((e as any).kind ?? "").toLowerCase();
+            if (kind !== "shop") continue;
+
+            const amount =
+                Number((e as any).amount ?? (Number(e.qty ?? 0) * Number(e.price ?? 0))) || 0;
+            s += amount;
         }
         return s;
     }, [expenses, month]);
@@ -192,11 +215,12 @@ export default function SummaryScreen() {
             t.cash += r.totalCash;
             t.debt += r.debt;
         }
-        const netProfit = (t.sales - t.returns) - sumExpensesMonth;
+        const netProfit = t.sales - t.returns - sumExpensesMonth;
         return { ...t, expenses: sumExpensesMonth, netProfit };
     }, [rows, sumExpensesMonth]);
 
-    const netProfitColor = totals.netProfit > 0 ? "#10B981" : totals.netProfit < 0 ? "#EF4444" : C.text;
+    const netProfitColor =
+        totals.netProfit > 0 ? "#10B981" : totals.netProfit < 0 ? "#EF4444" : C.text;
 
     // PDF
     const [creatingPdf, setCreatingPdf] = useState(false);
@@ -236,7 +260,10 @@ export default function SummaryScreen() {
     const onShare = async () => {
         if (!pdfUri) return;
         try {
-            await Sharing.shareAsync(pdfUri, { mimeType: "application/pdf", dialogTitle: pdfName });
+            await Sharing.shareAsync(pdfUri, {
+                mimeType: "application/pdf",
+                dialogTitle: pdfName || "Hisobot",
+            });
         } catch { }
     };
     const onOpenExternal = async () => {
@@ -247,7 +274,10 @@ export default function SummaryScreen() {
     };
     const openFullScreen = () => {
         if (!pdfUri) return;
-        router.push({ pathname: "/(main)/admin/report-viewer", params: { uri: pdfUri, title: pdfName } });
+        router.push({
+            pathname: "/(main)/admin/report-viewer",
+            params: { uri: pdfUri, title: pdfName },
+        });
     };
 
     // YUKLAB OLISH (shu sahifaning ichida)
@@ -255,7 +285,8 @@ export default function SummaryScreen() {
         Platform.OS === "android" &&
         // @ts-ignore
         !!FileSystem.StorageAccessFramework &&
-        typeof (FileSystem as any).StorageAccessFramework.requestDirectoryPermissionsAsync === "function";
+        typeof (FileSystem as any).StorageAccessFramework
+            .requestDirectoryPermissionsAsync === "function";
 
     const onDownload = async () => {
         if (!pdfUri) return;
@@ -263,15 +294,29 @@ export default function SummaryScreen() {
             if (hasSAF) {
                 const saf = (FileSystem as any).StorageAccessFramework;
                 const perm = await saf.requestDirectoryPermissionsAsync();
-                if (!perm.granted) { alert("Ruxsat berilmadi."); return; }
+                if (!perm.granted) {
+                    alert("Ruxsat berilmadi.");
+                    return;
+                }
                 const name = (pdfName || "Hisobot").toString().replace(/\.pdf$/i, "");
-                const outUri = await saf.createFileAsync(perm.directoryUri, name, "application/pdf");
-                const b64 = await FileSystemLegacy.readAsStringAsync(pdfUri, { encoding: FileSystemLegacy.EncodingType.Base64 });
-                await FileSystem.writeAsStringAsync(outUri, b64, { encoding: "base64" as any });
+                const outUri = await saf.createFileAsync(
+                    perm.directoryUri,
+                    name,
+                    "application/pdf"
+                );
+                const b64 = await FileSystemLegacy.readAsStringAsync(pdfUri, {
+                    encoding: FileSystemLegacy.EncodingType.Base64,
+                });
+                await FileSystem.writeAsStringAsync(outUri, b64, {
+                    encoding: "base64" as any,
+                });
                 alert("Fayl yuklab olindi.");
             } else {
                 // iOS yoki SAF yo‘q → ulashish oynasi
-                await Sharing.shareAsync(pdfUri, { mimeType: "application/pdf", dialogTitle: pdfName || "Hisobot" });
+                await Sharing.shareAsync(pdfUri, {
+                    mimeType: "application/pdf",
+                    dialogTitle: pdfName || "Hisobot",
+                });
             }
         } catch (e) {
             console.warn("download error", e);
@@ -284,9 +329,7 @@ export default function SummaryScreen() {
     return (
         <ScrollView contentContainerStyle={{ padding: 16 }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-                <H1 style={{ flex: 1 }}>
-                    Umumiy Hisobot{loadingServer ? " …" : ""}
-                </H1>
+                <H1 style={{ flex: 1 }}>Umumiy Hisobot{loadingServer ? " …" : ""}</H1>
                 <Button
                     title={creatingPdf ? "PDF tayyorlanmoqda…" : "PDF yaratish"}
                     onPress={createPdf}
@@ -299,9 +342,20 @@ export default function SummaryScreen() {
             <Select value={month} onChange={setMonth} options={monthOpts} style={{ marginTop: 6 }} />
 
             <Card style={{ marginTop: 12, padding: 0 }}>
-                <ScrollView horizontal showsHorizontalScrollIndicator contentContainerStyle={{ minWidth: 760 }}>
+                <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator
+                    contentContainerStyle={{ minWidth: 760 }}
+                >
                     <View style={{ width: "100%" }}>
-                        <View style={{ flexDirection: "row", backgroundColor: "#F9FAFB", borderBottomWidth: 1, borderColor: C.border }}>
+                        <View
+                            style={{
+                                flexDirection: "row",
+                                backgroundColor: "#F9FAFB",
+                                borderBottomWidth: 1,
+                                borderColor: C.border,
+                            }}
+                        >
                             <Cell label="Do'kon" bold flex />
                             <Cell label="Sotuv" bold right width={140} />
                             <Cell label="Qaytarish" bold right width={140} />
@@ -311,11 +365,16 @@ export default function SummaryScreen() {
 
                         {rows.length === 0 ? (
                             <View style={{ padding: 14 }}>
-                                <Text style={{ color: C.muted }}>Tanlangan oyda ma'lumot yo‘q</Text>
+                                <Text style={{ color: C.muted }}>
+                                    Tanlangan oyda ma'lumot yo‘q
+                                </Text>
                             </View>
                         ) : (
                             rows.map((r) => (
-                                <View key={r.storeId} style={{ flexDirection: "row", borderTopWidth: 1, borderColor: C.border }}>
+                                <View
+                                    key={r.storeId}
+                                    style={{ flexDirection: "row", borderTopWidth: 1, borderColor: C.border }}
+                                >
                                     <Cell label={r.storeName} flex />
                                     <Cell label={fmt(r.totalSales)} right width={140} />
                                     <Cell label={fmt(r.totalReturns)} right width={140} />
@@ -325,7 +384,14 @@ export default function SummaryScreen() {
                             ))
                         )}
 
-                        <View style={{ flexDirection: "row", borderTopWidth: 2, borderColor: "#EAB308", backgroundColor: "#FEF3C7" }}>
+                        <View
+                            style={{
+                                flexDirection: "row",
+                                borderTopWidth: 2,
+                                borderColor: "#EAB308",
+                                backgroundColor: "#FEF3C7",
+                            }}
+                        >
                             <Cell label="Jami" bold flex />
                             <Cell label={fmt(totals.sales)} right bold width={140} />
                             <Cell label={fmt(totals.returns)} right bold width={140} />
@@ -338,12 +404,23 @@ export default function SummaryScreen() {
 
             <View style={{ flexDirection: "row", gap: 12, marginTop: 12 }}>
                 <Card style={{ flex: 1 }}>
-                    <Text style={{ color: C.muted, fontWeight: "800" }}>Umumiy xarajat</Text>
-                    <Text style={{ fontSize: 18, fontWeight: "900", marginTop: 6 }}>{fmt(totals.expenses)} so‘m</Text>
+                    <Text style={{ color: C.muted, fontWeight: "800" }}>
+                        Umumiy xarajat (faqat do‘kon)
+                    </Text>
+                    <Text style={{ fontSize: 18, fontWeight: "900", marginTop: 6 }}>
+                        {fmt(totals.expenses)} so‘m
+                    </Text>
                 </Card>
                 <Card style={{ flex: 1 }}>
                     <Text style={{ color: C.muted, fontWeight: "800" }}>Sof foyda</Text>
-                    <Text style={{ fontSize: 18, fontWeight: "900", marginTop: 6, color: netProfitColor }}>
+                    <Text
+                        style={{
+                            fontSize: 18,
+                            fontWeight: "900",
+                            marginTop: 6,
+                            color: netProfitColor,
+                        }}
+                    >
                         {fmt(totals.netProfit)} so‘m
                     </Text>
                 </Card>
@@ -353,7 +430,14 @@ export default function SummaryScreen() {
                 <Card style={{ marginTop: 12 }}>
                     <Text style={{ fontWeight: "900" }}>{pdfName}</Text>
                     <TouchableOpacity onPress={onOpenExternal} activeOpacity={0.7}>
-                        <Text style={{ color: "#2563EB", marginTop: 6, textDecorationLine: "underline" }} numberOfLines={2}>
+                        <Text
+                            style={{
+                                color: "#2563EB",
+                                marginTop: 6,
+                                textDecorationLine: "underline",
+                            }}
+                            numberOfLines={2}
+                        >
                             {pdfUri}
                         </Text>
                     </TouchableOpacity>
@@ -364,19 +448,17 @@ export default function SummaryScreen() {
                         <Button title="Ochish" onPress={openFullScreen} style={{ flex: 1 }} />
                     </View>
 
-                    {/* Pastda: chapda Bekor (50%), o‘ngda Yuklab olish (50%) */}
+                    {/* Pastda: Bekor + Yuklab olish */}
                     <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
                         <Button
                             title="Bekor qilish"
-                            onPress={() => { setPdfUri(null); }}
+                            onPress={() => {
+                                setPdfUri(null);
+                            }}
                             tone="neutral"
                             style={{ flex: 1 }}
                         />
-                        <Button
-                            title="Yuklab olish"
-                            onPress={onDownload}
-                            style={{ flex: 1 }}
-                        />
+                        <Button title="Yuklab olish" onPress={onDownload} style={{ flex: 1 }} />
                     </View>
                 </Card>
             )}
@@ -408,7 +490,13 @@ function Cell({
                 borderColor: C.border,
             }}
         >
-            <Text style={{ fontWeight: bold ? "800" : "400", textAlign: right ? "right" : "left", color: C.text }}>
+            <Text
+                style={{
+                    fontWeight: bold ? "800" : "400",
+                    textAlign: right ? "right" : "left",
+                    color: C.text,
+                }}
+            >
                 {label}
             </Text>
         </View>

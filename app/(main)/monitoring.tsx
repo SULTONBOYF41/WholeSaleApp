@@ -34,6 +34,7 @@ type AnyRow = {
     qty: number;
     price: number;
     unit: "дона" | "кг";
+    storeName?: string;
 };
 type Group<T extends AnyRow> = { key: string; created: number; storeId: string; items: T[] };
 
@@ -145,6 +146,8 @@ export default function Monitoring() {
         setConfirmText("");
     };
 
+
+
     const openGroupEdit = (type: Tab, key: string) => {
         setEditType(type);
         setOpenKey(key);
@@ -226,13 +229,13 @@ export default function Monitoring() {
     };
 
     const money = (n: number) => (n || 0).toLocaleString() + " so‘m";
-    const getStoreName = (sid: string) => stores.find((s) => String(s.id) === sid)?.name ?? "—";
+
 
     const GroupCard = ({ g, type }: { g: Group<AnyRow>; type: Tab }) => {
         const total = g.items.reduce((a: number, r: AnyRow) => a + r.qty * r.price, 0);
         const d = new Date(g.created);
         const preview = g.items.slice(0, 2);
-        const storeName = getStoreName(g.storeId);
+        const storeName = getStoreName(g.storeId, g.items);
 
         return (
             <Card style={{ marginTop: 8, padding: 12 }}>
@@ -290,6 +293,19 @@ export default function Monitoring() {
                 </View>
             </Card>
         );
+    };
+
+    const getStoreName = (sid: string, items?: AnyRow[]) => {
+        // 1) saqlangan (denormalized) nomdan
+        const den = items?.[0]?.storeName;
+        if (den) return den;
+
+        // 2) tirik stores ro‘yxatidan
+        const live = stores.find((s) => String(s.id) === sid)?.name;
+        if (live) return live;
+
+        // 3) bo‘lmasa eski snapshotdan topilmaydi — lekin endi denormalize tufayli odatda topiladi
+        return "—";
     };
 
     return (

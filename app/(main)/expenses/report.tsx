@@ -1,6 +1,6 @@
 // app/(main)/expenses/report.tsx
 import { ReportCards } from "@/components/expenses/ReportCards";
-import { Button, H2 } from "@/components/UI";
+import { Button, H2, Select } from "@/components/UI";
 import { useExpensesStore } from "@/store/expensesStore";
 import { useSyncStore } from "@/store/syncStore";
 import * as Print from "expo-print";
@@ -11,10 +11,30 @@ import { RefreshControl, ScrollView, View } from "react-native";
 
 const PRIMARY = "#770E13";
 
+function monthOptions(lastN = 24) {
+    const now = new Date();
+    const arr: { label: string; value: string }[] = [];
+    for (let i = 0; i < lastN; i++) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        const val = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+        const label = d.toLocaleString(undefined, { year: "numeric", month: "long" });
+        arr.push({ label, value: val });
+    }
+    return arr;
+}
+const toYM = (ts: string | number | Date) => {
+    const d = new Date(ts);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+};
+
 export default function ReportScreen() {
-    const { fetchAll, loading, totals } = useExpensesStore();
+    const { fetchAll, loading, totals, items, batchesByKind } = useExpensesStore();
     const online = useSyncStore((s) => s.online);
     const [exporting, setExporting] = useState(false);
+
+    // Oy tanlash
+    const monthOpts = useMemo(() => monthOptions(24), []);
+    const [month, setMonth] = useState<string>(monthOpts[0]?.value);
 
     useFocusEffect(
         useCallback(() => {
@@ -22,14 +42,42 @@ export default function ReportScreen() {
         }, [online, fetchAll])
     );
 
+    // Tanlangan oy bo‘yicha jami (family/shop/bank)
+    const monthTotals = useMemo(() => {
+        const inMonth = (ts: string) => toYM(ts) === month;
+
+        const sum = (xs: number[]) =>
+            xs.reduce((a, b) => a + (Number.isFinite(b) ? b : 0), 0);
+
+        const family = sum(
+            (batchesByKind.family || [])
+                .filter((b) => inMonth(b.created_at))
+                .map((b) => b.total)
+        );
+        const shop = sum(
+            (batchesByKind.shop || [])
+                .filter((b) => inMonth(b.created_at))
+                .map((b) => b.total)
+        );
+        const bank = sum(
+            (batchesByKind.bank || [])
+                .filter((b) => inMonth(b.created_at))
+                .map((b) => b.total)
+        );
+
+        return { family, shop, bank, total: family + shop + bank };
+    }, [batchesByKind, month]);
+
+    // Ehtiyot uchun (component ichida ishlatiladigan ko‘rinish)
     const safeTotals = useMemo(() => {
-        const tObj: Partial<{ family: number; shop: number; bank: number; total: number }> = totals ?? {};
+        const tObj: Partial<{ family: number; shop: number; bank: number; total: number }> =
+            monthTotals ?? totals ?? {};
         const f = Number(tObj.family ?? 0);
         const s = Number(tObj.shop ?? 0);
         const b = Number(tObj.bank ?? 0);
         const t = Number((tObj as any).total ?? f + s + b);
         return { family: f, shop: s, bank: b, total: t };
-    }, [totals]);
+    }, [monthTotals, totals]);
 
     const onGoFamily = () => router.replace("/(main)/expenses/family");
     const onGoShop = () => router.replace("/(main)/expenses/shop");
@@ -52,7 +100,7 @@ h1{margin:0 0 8px;font-size:22px}
 .total{background:#fafafa}
 </style></head><body>
 <h1>Xarajatlar hisobot</h1>
-<div class="muted">${dt}</div>
+<div class="muted">${dt} — ${month}</div>
 <div class="grid">
   <div class="card"><div class="title">Oilaviy</div><div class="val">${fmt(safeTotals.family)} so‘m</div></div>
   <div class="card"><div class="title">Do'kon</div><div class="val">${fmt(safeTotals.shop)} so‘m</div></div>
@@ -68,7 +116,10 @@ h1{margin:0 0 8px;font-size:22px}
             const html = buildHtml();
             const { uri } = await Print.printToFileAsync({ html });
             if (await Sharing.isAvailableAsync()) {
-                await Sharing.shareAsync(uri, { mimeType: "application/pdf", dialogTitle: "Xarajatlar hisobot (PDF)" });
+                await Sharing.shareAsync(uri, {
+                    mimeType: "application/pdf",
+                    dialogTitle: `Xarajatlar hisobot (${month})`,
+                });
             }
         } finally {
             setExporting(false);
@@ -85,16 +136,50 @@ h1{margin:0 0 8px;font-size:22px}
             refreshControl={<RefreshControl refreshing={loading} onRefresh={onRefresh} />}
             contentContainerStyle={{ paddingBottom: 16 }}
         >
-            <View style={{ paddingHorizontal: 16, paddingTop: 12, flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+            <View
+                style={{
+                    paddingHorizontal: 16,
+                    paddingTop: 12,
+                    gap: 10,
+                }}
+            >
                 <H2>Xarajatlar — Hisobot</H2>
-                <Button title={exporting ? "PDF tayyorlanmoqda..." : "PDF yuklash"} onPress={exportPdf} style={{ backgroundColor: PRIMARY }} disabled={exporting} />
+
+                {/* Oy tanlang */}
+                <Select value={month} onChange={setMonth} options={monthOpts} />
+
+                <View style={{ alignItems: "flex-end" }}>
+                    <Button
+                        title={exporting ? "PDF tayyorlanmoqda..." : "PDF yuklash"}
+                        onPress={exportPdf}
+                        style={{ backgroundColor: PRIMARY }}
+                        disabled={exporting}
+                    />
+                </View>
             </View>
 
-            <ReportCards totals={safeTotals} onGoFamily={onGoFamily} onGoShop={onGoShop} onGoBank={onGoBank} />
+            <ReportCards
+                totals={safeTotals}
+                onGoFamily={onGoFamily}
+                onGoShop={onGoShop}
+                onGoBank={onGoBank}
+            />
 
             {!online && (
-                <View style={{ marginHorizontal: 16, marginTop: 8, padding: 10, borderRadius: 10, borderWidth: 1, borderColor: "#FCD34D", backgroundColor: "#FEF3C7" }}>
-                    <H2 style={{ fontSize: 14 }}>Offline rejim — tarmoqqa ulanganingizda yangilanadi</H2>
+                <View
+                    style={{
+                        marginHorizontal: 16,
+                        marginTop: 8,
+                        padding: 10,
+                        borderRadius: 10,
+                        borderWidth: 1,
+                        borderColor: "#FCD34D",
+                        backgroundColor: "#FEF3C7",
+                    }}
+                >
+                    <H2 style={{ fontSize: 14 }}>
+                        Offline rejim — tarmoqqa ulanganingizda yangilanadi
+                    </H2>
                 </View>
             )}
         </ScrollView>

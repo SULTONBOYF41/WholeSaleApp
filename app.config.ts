@@ -1,62 +1,68 @@
 // app.config.ts
 import 'dotenv/config';
-import type { ExpoConfig } from "expo/config";
-// Agar app.json’dan qiymat o‘qimoqchi bo‘lsangiz (ixtiyoriy):
-// const staticCfg = require("./app.json"); // { expo: { ... } }
+import type { ExpoConfig } from 'expo/config';
 
 export default (): ExpoConfig => ({
-    name: "SavdoHisobi",
-    slug: "savdohisobi",
-    scheme: "wholesaleapp",
-    version: "1.0.0",
+    name: 'SavdoHisobi',            // Launcher tagidagi nom
+    slug: 'savdohisobi',
+    scheme: 'wholesaleapp',
+    version: '1.0.1',               // App versiyasi (marketing)
+    runtimeVersion: '1.0.1',        // EAS Update ishlatsangiz moslang
 
     experiments: { typedRoutes: true },
 
     android: {
-        package: "com.ruhshonatortapps.SavdoHisobi",
-        "versionCode": 1,
-        permissions: ["CAMERA"] // ⬅️ kamerani so'raymiz
+        package: 'com.ruhshonatortapps.SavdoHisobi',
+        versionCode: 2,               // ↑ yangi build uchun oshiring
+        permissions: ['CAMERA'],
+
+        // Ikonka: Android’da adaptive icon tavsiya qilinadi
+        icon: './assets/App-icon.png', // 48–192px kvadrat (fallback)
+        adaptiveIcon: {
+            foregroundImage: './assets/App-icon.png', // markaziy logo (transparent fon)
+            backgroundColor: '#F6EAD4',                      // fon rangi
+            // ixtiyoriy: Android 13 uchun monochrome
+            // monochromeImage: './assets/icon-mono.png',
+        },
     },
 
     ios: {
-        bundleIdentifier: "com.ruhshonatortapps.SavdoHisobi"
+        bundleIdentifier: 'com.ruhshonatortapps.SavdoHisobi',
+        // iOS ikonkasi umumiy icon dan olinadi (alohida ios.icon yo‘q)
     },
 
+    // Hozircha OTA URL’ni qo‘lda bermaymiz — EAS o‘zi yozadi
     updates: {
         enabled: true,
-        checkAutomatically: "ON_LOAD",
+        checkAutomatically: 'ON_LOAD',
         fallbackToCacheTimeout: 0,
-        url: "https://u.expo.dev/1333c9b1-8910-4a25-9354-97cf2d39be36", // ← EAS Update URL
+        // url:  <-- OLIB TASHLANG yoki yangi projectId bo‘lsa, keyin EAS Update o‘zi qo‘yadi
     },
 
+    owner: 'ruhshonatortapps',
 
-    runtimeVersion: "1.0.0", // <<<<<<<<< MUHIM: bare workflow uchun qat’iy satr
+    // Umumiy ikonka (iOS va eski Androidlar uchun)
+    icon: './assets/App-icon.png',
 
-
-    "owner": "ruhshonatortapps",
-
-
-    icon: "./assets/App-icon.png",
     splash: {
-        image: "./assets/App-icon.png",
-        resizeMode: "contain",   // yoki "cover"
-        backgroundColor: "#F6EAD4"
+        image: './assets/App-icon.png',
+        resizeMode: 'contain',
+        backgroundColor: '#F6EAD4',
     },
 
     extra: {
         SUPABASE_URL: process.env.EXPO_PUBLIC_SUPABASE_URL,
         SUPABASE_ANON_KEY: process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY,
-        eas: {
-            projectId: "1333c9b1-8910-4a25-9354-97cf2d39be36",
-        },
+        "eas": {
+            "projectId": "f3ecb9e7-108f-4388-a74d-a2418c05d415"
+        }
     },
 
     plugins: [
-        "expo-router",
-        "expo-font",
-        "expo-secure-store",
-        "expo-web-browser",
-        "expo-dev-client", // ⬅️ QO‘SHING (faqat dev build uchun foydali)
+        'expo-router',
+        'expo-font',
+        'expo-secure-store',
+        'expo-web-browser',
+        // 'expo-dev-client', // Faqat dev client qurmoqchi bo‘lsangiz qoldiring
     ],
 });
-

@@ -1,5 +1,4 @@
 // app/(main)/returns.tsx
-import StorePicker from "@/components/StorePicker";
 import Toast from "@/components/Toast";
 import { getStorePrice } from "@/lib/pricing";
 import { supabase } from "@/lib/supabase";
@@ -178,10 +177,6 @@ export default function Returns() {
                 contentContainerStyle={{ padding: 16, paddingBottom: 140 }}
                 keyboardShouldPersistTaps="handled"
             >
-                {/* Header dropdown (fallback) */}
-                <View style={{ marginBottom: 10 }}>
-                    <StorePicker compact onPicked={(id) => setCurrentStore(id)} />
-                </View>
 
                 {/* Store info yoki ogohlantirish */}
                 {NeedStore ? (

@@ -22,6 +22,7 @@ export type Sale = {
     price: number;
     created_at: number;
     batchId?: string;
+    storeName?: string;   // <— qo'shildi (optional)
 };
 export type Ret = {
     id: string;
@@ -32,6 +33,7 @@ export type Ret = {
     price: number;
     created_at: number;
     batchId?: string;
+    storeName?: string;   // <— qo'shildi (optional)
 };
 
 export type CashReceipt = { id: string; storeId: string; amount: number; created_at: number };

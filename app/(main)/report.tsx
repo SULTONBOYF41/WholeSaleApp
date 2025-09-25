@@ -5,10 +5,42 @@ import { supabase } from "@/lib/supabase";
 import { useAppStore } from "@/store/appStore";
 import { useToastStore } from "@/store/toastStore";
 import type { MonthlySummary } from "@/types";
+import * as Sharing from "expo-sharing";
 import React, { useEffect, useMemo, useState } from "react";
 import { Linking, Modal, Pressable, ScrollView, Text, TouchableOpacity, View } from "react-native";
 
 const P = "#770E13";
+
+/** Helpers */
+function ymOf(ts: number | string | Date) {
+    const d = new Date(ts as any);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+/** Qarzni oyma-oy ko‘chirib hisoblaydi (shu oygacha bo‘lgan jami net) */
+function computeDebtWithCarry(
+    allSales: { storeId: any; created_at: any; qty: number; price: number }[],
+    allReturns: { storeId: any; created_at: any; qty: number; price: number }[],
+    allCash: { storeId: any; created_at: any; amount: number }[],
+    month: string,
+    storeId: string | number
+) {
+    const sid = String(storeId);
+
+    const salesUpTo = allSales
+        .filter((x) => String(x.storeId) === sid && ymOf(x.created_at) <= month)
+        .reduce((a, s) => a + s.qty * s.price, 0);
+
+    const returnsUpTo = allReturns
+        .filter((x) => String(x.storeId) === sid && ymOf(x.created_at) <= month)
+        .reduce((a, r) => a + r.qty * r.price, 0);
+
+    const cashUpTo = allCash
+        .filter((x) => String(x.storeId) === sid && ymOf(x.created_at) <= month)
+        .reduce((a, r) => a + r.amount, 0);
+
+    return Math.max(salesUpTo - returnsUpTo - cashUpTo, 0);
+}
 
 export default function ReportScreen() {
     // ---- Global stores
@@ -33,61 +65,46 @@ export default function ReportScreen() {
     const [msRow, setMsRow] = useState<MonthlySummary | null>(null);
     const [msLoading, setMsLoading] = useState(false);
 
+    // Collapsible rank sections
+    const [openSalesRank, setOpenSalesRank] = useState(false);
+    const [openReturnRank, setOpenReturnRank] = useState(false);
+
     // ---- Derived helpers
     const storeName = useMemo(
         () => stores.find((s) => String(s.id) === String(selectedStoreId))?.name ?? "",
         [stores, selectedStoreId]
     );
 
-    const inMonth = (t: number | string | Date) => {
-        const d = new Date(t as any);
-        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-        return key === month;
-    };
+    const inMonth = (t: number | string | Date) => ymOf(t) === month;
 
     const sales = useMemo(
-        () =>
-            allSales.filter(
-                (x) => String(x.storeId) === String(selectedStoreId) && inMonth(x.created_at)
-            ),
+        () => allSales.filter((x) => String(x.storeId) === String(selectedStoreId) && inMonth(x.created_at)),
         [allSales, selectedStoreId, month]
     );
 
     const returns = useMemo(
-        () =>
-            allReturns.filter(
-                (x) => String(x.storeId) === String(selectedStoreId) && inMonth(x.created_at)
-            ),
+        () => allReturns.filter((x) => String(x.storeId) === String(selectedStoreId) && inMonth(x.created_at)),
         [allReturns, selectedStoreId, month]
     );
 
     const receipts = useMemo(
-        () =>
-            cash.filter(
-                (x) => String(x.storeId) === String(selectedStoreId) && inMonth(x.created_at)
-            ),
+        () => cash.filter((x) => String(x.storeId) === String(selectedStoreId) && inMonth(x.created_at)),
         [cash, selectedStoreId, month]
     );
 
-    const localTotalSales = useMemo(
-        () => sales.reduce((a, s) => a + s.price * s.qty, 0),
-        [sales]
-    );
-    const localTotalReturns = useMemo(
-        () => returns.reduce((a, r) => a + r.price * r.qty, 0),
-        [returns]
-    );
-    const localTotalCash = useMemo(
-        () => receipts.reduce((a, r) => a + r.amount, 0),
-        [receipts]
-    );
-    const localDebt = Math.max(localTotalSales - localTotalReturns - localTotalCash, 0);
+    const localTotalSales = useMemo(() => sales.reduce((a, s) => a + s.price * s.qty, 0), [sales]);
+    const localTotalReturns = useMemo(() => returns.reduce((a, r) => a + r.price * r.qty, 0), [returns]);
+    const localTotalCash = useMemo(() => receipts.reduce((a, r) => a + r.amount, 0), [receipts]);
 
-    const returnsQty = useMemo(
-        () => returns.reduce((a, r) => a + r.qty, 0),
-        [returns]
-    );
+    // Carry-over qarz
+    const localDebtCarry = useMemo(() => {
+        if (!selectedStoreId) return 0;
+        return computeDebtWithCarry(allSales, allReturns, cash, month, selectedStoreId);
+    }, [allSales, allReturns, cash, month, selectedStoreId]);
 
+    const returnsQty = useMemo(() => returns.reduce((a, r) => a + r.qty, 0), [returns]);
+
+    // Sotuv reytingi (miqdor + pul)
     const salesRank = useMemo(() => {
         const map = new Map<string, { qty: number; total: number }>();
         for (const s of sales) {
@@ -101,17 +118,23 @@ export default function ReportScreen() {
             .sort((a, b) => b.total - a.total);
     }, [sales]);
 
+    // Vazvrat reytingi (miqdor + pul)
     const returnRank = useMemo(() => {
-        const map = new Map<string, number>();
-        for (const r of returns) map.set(r.productName, (map.get(r.productName) ?? 0) + r.qty);
+        const map = new Map<string, { qty: number; total: number }>();
+        for (const r of returns) {
+            const cur = map.get(r.productName) ?? { qty: 0, total: 0 };
+            cur.qty += r.qty;
+            cur.total += r.qty * r.price;
+            map.set(r.productName, cur);
+        }
         return Array.from(map.entries())
-            .map(([name, qty]) => ({ name, qty }))
-            .sort((a, b) => b.qty - a.qty);
+            .map(([name, v]) => ({ name, qty: v.qty, total: v.total }))
+            .sort((a, b) => b.total - a.total);
     }, [returns]);
 
     const money = (n: number) => `${(n || 0).toLocaleString()} so‘m`;
 
-    // ---- Summary fetcher
+    // ---- Summary fetcher (serverdan)
     const fetchSummary = async () => {
         if (!selectedStoreId) return;
         setMsLoading(true);
@@ -136,7 +159,7 @@ export default function ReportScreen() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [selectedStoreId, month]);
 
-    // ---- Early return (hooklar yuqorida aniq chaqirildi, xavfsiz)
+    // ---- Early return
     if (!selectedStoreId) {
         return (
             <View style={{ padding: 16 }}>
@@ -151,7 +174,7 @@ export default function ReportScreen() {
             const totals = {
                 totalSales: msRow?.total_sales ?? localTotalSales,
                 totalCash: msRow?.total_cash ?? localTotalCash,
-                debt: msRow?.debt ?? localDebt,
+                debt: (msRow?.debt_raw ?? msRow?.debt) ?? localDebtCarry,
                 returnCount: returnsQty,
             };
             const result = await exportDashboardPdf({
@@ -180,7 +203,7 @@ export default function ReportScreen() {
     const viewTotalSales = msRow?.total_sales ?? localTotalSales;
     const viewTotalReturns = msRow?.total_returns ?? localTotalReturns;
     const viewTotalCash = msRow?.total_cash ?? localTotalCash;
-    const viewDebt = msRow?.debt_raw ?? localDebt;
+    const viewDebt = (msRow?.debt_raw ?? msRow?.debt) ?? localDebtCarry;
 
     return (
         <>
@@ -218,12 +241,20 @@ export default function ReportScreen() {
                 </View>
 
                 <View style={{ height: 14 }} />
-                <Text style={{ fontSize: 18, fontWeight: "800", marginBottom: 6 }}>Sotuv reytingi</Text>
-                <RankTableSales rows={salesRank} />
+                <TouchableOpacity onPress={() => setOpenSalesRank((v) => !v)} activeOpacity={0.7}>
+                    <Text style={{ fontSize: 18, fontWeight: "800", marginBottom: 6 }}>
+                        Sotuv reytingi {openSalesRank ? "▲" : "▼"}
+                    </Text>
+                </TouchableOpacity>
+                {openSalesRank && <RankTableSales rows={salesRank} />}
 
                 <View style={{ height: 16 }} />
-                <Text style={{ fontSize: 18, fontWeight: "800", marginBottom: 6 }}>Vazvrat reytingi</Text>
-                <RankTableReturns rows={returnRank} />
+                <TouchableOpacity onPress={() => setOpenReturnRank((v) => !v)} activeOpacity={0.7}>
+                    <Text style={{ fontSize: 18, fontWeight: "800", marginBottom: 6 }}>
+                        Vazvrat reytingi {openReturnRank ? "▲" : "▼"}
+                    </Text>
+                </TouchableOpacity>
+                {openReturnRank && <RankTableReturns rows={returnRank} />}
             </ScrollView>
 
             {/* PDF modal */}
@@ -250,6 +281,7 @@ function StatCard({ title, value }: { title: string; value: string }) {
         </View>
     );
 }
+
 function RankTableSales({ rows }: { rows: { name: string; qty: number; total: number }[] }) {
     if (rows.length === 0) return <Text style={{ color: "#777" }}>Reyting bo‘sh</Text>;
     return (
@@ -257,35 +289,39 @@ function RankTableSales({ rows }: { rows: { name: string; qty: number; total: nu
             <View style={{ flexDirection: "row", backgroundColor: "#F9FAFB" }}>
                 <Cell flex label="Mahsulot" bold />
                 <Cell width={90} label="Miqdor" right bold />
-                <Cell width={120} label="Daromad" right bold />
+                <Cell width={120} label="Pul" right bold />
             </View>
             {rows.map((r, i) => (
                 <View key={i} style={{ flexDirection: "row" }}>
                     <Cell flex label={r.name} />
                     <Cell width={90} label={String(r.qty)} right />
-                    <Cell width={120} label={String((r.total || 0).toLocaleString())} right />
+                    <Cell width={120} label={(r.total || 0).toLocaleString()} right />
                 </View>
             ))}
         </View>
     );
 }
-function RankTableReturns({ rows }: { rows: { name: string; qty: number }[] }) {
+
+function RankTableReturns({ rows }: { rows: { name: string; qty: number; total: number }[] }) {
     if (rows.length === 0) return <Text style={{ color: "#777" }}>Reyting bo‘sh</Text>;
     return (
         <View style={{ borderWidth: 1, borderColor: "#E9ECF1", borderRadius: 12, overflow: "hidden" }}>
             <View style={{ flexDirection: "row", backgroundColor: "#F9FAFB" }}>
                 <Cell flex label="Mahsulot" bold />
                 <Cell width={100} label="Miqdor" right bold />
+                <Cell width={120} label="Pul" right bold />
             </View>
             {rows.map((r, i) => (
                 <View key={i} style={{ flexDirection: "row" }}>
                     <Cell flex label={r.name} />
                     <Cell width={100} label={String(r.qty)} right />
+                    <Cell width={120} label={(r.total || 0).toLocaleString()} right />
                 </View>
             ))}
         </View>
     );
 }
+
 function Cell({
     label,
     bold,
@@ -337,6 +373,15 @@ function PdfModal({
             await Linking.openURL(url);
         } catch { }
     };
+
+    const sharePdf = async () => {
+        if (!pdfLink) return;
+        try {
+            const can = await Sharing.isAvailableAsync();
+            if (can) await Sharing.shareAsync(pdfLink, { mimeType: "application/pdf", dialogTitle: pdfName });
+        } catch { }
+    };
+
     return (
         <Modal visible={open} transparent animationType="fade" onRequestClose={onClose}>
             <Pressable
@@ -386,6 +431,18 @@ function PdfModal({
                     </View>
 
                     <View style={{ flexDirection: "row", gap: 10, marginTop: 14, justifyContent: "flex-end" }}>
+                        <TouchableOpacity
+                            onPress={sharePdf}
+                            style={{ paddingVertical: 12, paddingHorizontal: 16, borderRadius: 12, backgroundColor: "#10B981" }}
+                        >
+                            <Text style={{ fontWeight: "800", color: "#fff" }}>Ulashish</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            onPress={openPdfExternal}
+                            style={{ paddingVertical: 12, paddingHorizontal: 16, borderRadius: 12, backgroundColor: "#2563EB" }}
+                        >
+                            <Text style={{ fontWeight: "800", color: "#fff" }}>Ochish</Text>
+                        </TouchableOpacity>
                         <TouchableOpacity
                             onPress={onClose}
                             style={{ paddingVertical: 12, paddingHorizontal: 16, borderRadius: 12, backgroundColor: "#F3F4F6" }}
