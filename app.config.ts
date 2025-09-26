@@ -36,7 +36,7 @@ export default (): ExpoConfig => ({
         enabled: true,
         checkAutomatically: 'ON_LOAD',
         fallbackToCacheTimeout: 0,
-        // url:  <-- OLIB TASHLANG yoki yangi projectId bo‘lsa, keyin EAS Update o‘zi qo‘yadi
+        "url": "https://u.expo.dev/f3ecb9e7-108f-4388-a74d-a2418c05d415"
     },
 
     owner: 'ruhshonatortapps',

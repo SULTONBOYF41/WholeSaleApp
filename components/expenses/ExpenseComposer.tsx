@@ -24,13 +24,15 @@ export default function ExpenseComposer({ kind }: { kind: ExpenseKind }) {
 
     const total = normalize().reduce((s, r) => s + r.qty * r.price, 0);
 
+    // 1) onSave boshiga double-submit guard
     const onSave = async () => {
+        if (saving) return;             // <— qo'shildi
         const n = normalize();
         if (!n.length) return;
         setSaving(true);
         try {
             if (editingBatch) {
-                await editBatch(editingBatch.id, kind, n);
+                await editBatch(editingBatch.id, kind, n);   // <— faqat editBatch
                 setEditingBatch(null);
             } else {
                 await addBatch(kind, n);
@@ -43,8 +45,10 @@ export default function ExpenseComposer({ kind }: { kind: ExpenseKind }) {
         }
     };
 
+
+    // 3) onEdit ichida — faqat batch.id saqlanib, formaga aynan shu batch qatorlari yuklanadi
     const onEdit = (b: ExpenseBatch) => {
-        setEditingBatch(b);
+        setEditingBatch(b);  // <— MUHIM: keyin saqlaganda aynan shu id bilan editBatch ketadi
         setRows(
             b.items.map((i) => {
                 const qty = Number(i.qty ?? 0) || 0;
@@ -55,10 +59,12 @@ export default function ExpenseComposer({ kind }: { kind: ExpenseKind }) {
         if (!showHistory) setShowHistory(true);
     };
 
+    // 2) onDelete boshiga ham guard
     const onDelete = async (b: ExpenseBatch) => {
+        if (saving) return;             // <— qo'shildi
         setSaving(true);
         try {
-            await deleteBatch(b.id);
+            await deleteBatch(b.id);    // <— faqat batch.id yuboramiz
             if (editingBatch?.id === b.id) {
                 setEditingBatch(null);
                 setRows([{ title: "", qty: "", price: "" }]);

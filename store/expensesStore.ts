@@ -336,6 +336,7 @@ export const useExpensesStore = create<ExpensesState>((set, get) => ({
         return batch_id;
     },
 
+    // EDIT
     editBatch: async (batch_id, kind, rows) => {
         const ts = new Date().toISOString();
         const queuedRows: RowQueued[] = rows.map((r) => ({
@@ -349,7 +350,6 @@ export const useExpensesStore = create<ExpensesState>((set, get) => ({
 
         if (!get().online) {
             await pushOp({ op: "edit", kind, rows: queuedRows, batch_id });
-            // optimistik: eski batchni olib tashlab, yangisini qo'shamiz
             const filtered = get().items.filter((x) => x.batch_id !== batch_id);
             const added = queuedRows.map<Expense>((r) => ({
                 id: uuidLike(),
@@ -367,10 +367,10 @@ export const useExpensesStore = create<ExpensesState>((set, get) => ({
             return;
         }
 
+        // Eski batchni o‘chirib tashlaymiz
         const del = await supabase.from("expenses").delete().eq("batch_id", batch_id);
         if (del.error) {
             logDbError("editBatch.delete", del.error);
-            // fallback: queue + optimistik
             await pushOp({ op: "edit", kind, rows: queuedRows, batch_id });
             const filtered = get().items.filter((x) => x.batch_id !== batch_id);
             const added = queuedRows.map<Expense>((r) => ({
@@ -400,7 +400,7 @@ export const useExpensesStore = create<ExpensesState>((set, get) => ({
             note: r.note ?? null,
             created_at: r.created_at!,
         }));
-        const ins = await supabase.from("expenses").upsert(payload, { onConflict: "client_id" }).select();
+        const ins = await supabase.from("expenses").upsert(payload, { onConflict: "client_id" });
         if (ins.error) {
             logDbError("editBatch.upsert", ins.error);
             await pushOp({ op: "edit", kind, rows: queuedRows, batch_id });
@@ -412,6 +412,7 @@ export const useExpensesStore = create<ExpensesState>((set, get) => ({
         }
     },
 
+    // DELETE
     deleteBatch: async (batch_id) => {
         if (!get().online) {
             await pushOp({ op: "delete", batch_id });
@@ -420,7 +421,7 @@ export const useExpensesStore = create<ExpensesState>((set, get) => ({
             return;
         }
 
-        const del = await supabase.from("expenses").delete().eq("batch_id", batch_id).select();
+        const del = await supabase.from("expenses").delete().eq("batch_id", batch_id);
         if (del.error) {
             logDbError("deleteBatch", del.error);
             await pushOp({ op: "delete", batch_id });
