@@ -4,7 +4,8 @@ import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
 
 /** Format helper */
-const money = (n: number) => (n || 0).toLocaleString("ru-RU").replace(/\s/g, " ") + " so'm";
+const money = (n: number) =>
+  (n || 0).toLocaleString("ru-RU").replace(/\s/g, " ") + " so'm";
 
 /* =========================
    A) STORE DASHBOARD PDF (o‘zgarmagan)
@@ -16,7 +17,14 @@ type ReturnRow = { name: string; qty: number };
 export async function exportDashboardPdf(opts: {
   storeName: string;
   periodLabel: string;
-  cards: { totalSales: number; totalCash: number; debt: number; returnCount: number; totalExpenses?: number; netProfit?: number };
+  cards: {
+    totalSales: number;
+    totalCash: number;
+    debt: number;
+    returnCount: number;
+    totalExpenses?: number;
+    netProfit?: number;
+  };
   salesRank: SalesRow[];
   returnRank: ReturnRow[];
 }): Promise<{ uri: string; name: string }> {
@@ -24,10 +32,14 @@ export async function exportDashboardPdf(opts: {
 
   const optionalCardsHtml = [
     cards.totalExpenses != null
-      ? `<div class="card"><div class="title">Xarajat</div><div class="value">${money(cards.totalExpenses)}</div></div>`
+      ? `<div class="card"><div class="title">Xarajat</div><div class="value">${money(
+        cards.totalExpenses
+      )}</div></div>`
       : "",
     cards.netProfit != null
-      ? `<div class="card"><div class="title">Sof foyda</div><div class="value">${money(cards.netProfit)}</div></div>`
+      ? `<div class="card"><div class="title">Sof foyda</div><div class="value">${money(
+        cards.netProfit
+      )}</div></div>`
       : "",
   ].join("");
 
@@ -51,8 +63,8 @@ export async function exportDashboardPdf(opts: {
     </style>
   </head>
   <body>
-    <h1>Hisobot — ${storeName}</h1>
-    <div class="muted">Davr: ${periodLabel}</div>
+    <h1>Hisobot — ${escapeHtml(storeName)}</h1>
+    <div class="muted">Davr: ${escapeHtml(periodLabel)}</div>
 
     <div class="grid">
       <div class="card"><div class="title">Umumiy summa</div><div class="value">${money(cards.totalSales)}</div></div>
@@ -68,7 +80,12 @@ export async function exportDashboardPdf(opts: {
         <thead><tr><th>Mahsulot</th><th class="right">Miqdor</th><th class="right">Daromad</th></tr></thead>
         <tbody>
           ${salesRank
-      .map((r) => `<tr><td>${r.name}</td><td class="right">${r.qty}</td><td class="right">${money(r.total)}</td></tr>`)
+      .map(
+        (r) =>
+          `<tr><td>${escapeHtml(r.name)}</td><td class="right">${r.qty}</td><td class="right">${money(
+            r.total
+          )}</td></tr>`
+      )
       .join("")}
         </tbody>
       </table>
@@ -79,7 +96,11 @@ export async function exportDashboardPdf(opts: {
       <table>
         <thead><tr><th>Mahsulot</th><th class="right">Miqdor</th></tr></thead>
         <tbody>
-          ${returnRank.map((r) => `<tr><td>${r.name}</td><td class="right">${r.qty}</td></tr>`).join("")}
+          ${returnRank
+      .map(
+        (r) => `<tr><td>${escapeHtml(r.name)}</td><td class="right">${r.qty}</td></tr>`
+      )
+      .join("")}
         </tbody>
       </table>
     </div>
@@ -111,17 +132,31 @@ export type MonthlySummaryRow = {
 export async function exportMonthlySummaryPdf(opts: {
   ym: string;
   rows: MonthlySummaryRow[];
-  totals: { sales: number; returns: number; cash: number; debt: number; expenses: number; netProfit: number };
+  totals: {
+    sales: number;
+    returns: number;
+    cash: number;
+    debt: number;
+    expenses: number;         // do‘kon xarajatlari
+    netProfit: number;        // sof foyda
+    otherExpenses?: number;   // bank + oilaviy
+    remaining?: number;       // sof foyda - (bank+oilaviy)
+  };
   source?: "archive" | "summary";
   fileName?: string;
 }): Promise<{ uri: string; name: string }> {
   const { ym, rows, totals, source, fileName } = opts;
 
+  const other = Number(totals.otherExpenses ?? 0);
+  const remaining = Number(totals.remaining ?? totals.netProfit - other);
+  const remainBg = remaining > 0 ? "#10B981" : remaining < 0 ? "#EF4444" : "#6B7280";
+  const remainText = "#FFFFFF";
+
   const tableRows = rows
     .map(
       (r) => `
       <tr>
-        <td>${r.storeName}</td>
+        <td>${escapeHtml(r.storeName)}</td>
         <td class="right">${money(r.totalSales)}</td>
         <td class="right">${money(r.totalReturns)}</td>
         <td class="right">${money(r.totalCash)}</td>
@@ -143,6 +178,7 @@ export async function exportMonthlySummaryPdf(opts: {
       th{ background:#f9fafb; text-align:left; }
       .right{ text-align:right; }
       .grid{ display:grid; grid-template-columns:repeat(6, 1fr); gap:12px; margin:12px 0 16px; }
+      .grid2{ display:grid; grid-template-columns:1fr 1fr; gap:12px; margin:0 0 8px; }
       .card{ border:1px solid #e5e7eb; border-radius:12px; padding:12px; }
       .title{ color:#6b7280; font-weight:800; margin:0 0 6px; }
       .value{ font-size:18px; font-weight:900; }
@@ -150,7 +186,7 @@ export async function exportMonthlySummaryPdf(opts: {
     </style>
   </head>
   <body>
-    <h1>Oylik umumiy hisobot — ${ym}</h1>
+    <h1>Oylik umumiy hisobot — ${escapeHtml(ym)}</h1>
     <div class="muted">Manba: ${source === "archive" ? "Arxiv" : "Monthly Summary"}</div>
 
     <div class="grid">
@@ -160,6 +196,17 @@ export async function exportMonthlySummaryPdf(opts: {
       <div class="card"><div class="title">Qarz</div><div class="value">${money(totals.debt)}</div></div>
       <div class="card"><div class="title">Xarajat</div><div class="value">${money(totals.expenses)}</div></div>
       <div class="card"><div class="title">Sof foyda</div><div class="value">${money(totals.netProfit)}</div></div>
+    </div>
+
+    <div class="grid2">
+      <div class="card">
+        <div class="title">Qolgan xarajatlar (bank + oilaviy)</div>
+        <div class="value">${money(other)}</div>
+      </div>
+      <div class="card" style="background:${remainBg}; color:${remainText}; border-color:transparent;">
+        <div class="title" style="color:${remainText};">Qolgan pul</div>
+        <div class="value" style="color:${remainText};">${money(remaining)}</div>
+      </div>
     </div>
 
     <table>
@@ -185,7 +232,7 @@ export async function exportMonthlySummaryPdf(opts: {
     </table>
 
     <div class="muted" style="margin-top:10px">
-      Izoh: Sof foyda = (Jami Sotuv − Jami Qaytarish) − Umumiy Xarajat.
+      Izoh: Sof foyda = (Jami Sotuv − Jami Qaytarish) − Umumiy Xarajat; Qolgan pul = Sof foyda − (Bank + Oilaviy).
     </div>
   </body>
   </html>`;
@@ -203,4 +250,8 @@ export async function exportMonthlySummaryPdf(opts: {
 /** Ixtiyoriy helper: tashqi share */
 export async function sharePdf(uri: string, dialogTitle?: string) {
   try { await Sharing.shareAsync(uri, { mimeType: "application/pdf", dialogTitle }); } catch { }
+}
+
+function escapeHtml(s: string) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }

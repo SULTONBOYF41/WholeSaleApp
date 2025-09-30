@@ -1,11 +1,12 @@
 // app/(main)/admin/report-viewer.tsx
+import * as FileSystem from "expo-file-system";
+import * as IntentLauncher from "expo-intent-launcher";
 import * as Linking from "expo-linking";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import React, { useMemo } from "react";
 import { Platform, Text, TouchableOpacity, View } from "react-native";
 import { WebView } from "react-native-webview";
 
-// Ixtiyoriy: agar sizda ranglar bor bo'lsa, ishlating; yo'q bo'lsa qat'iy qiymatlar qoldiriladi
 const BORDER = "#E5E7EB";
 const HEADER_BG = "#FFFFFF";
 const BRAND = "#770E13";
@@ -14,29 +15,53 @@ export default function ReportViewer() {
     const router = useRouter();
     const { uri, title } = useLocalSearchParams<{ uri?: string; title?: string }>();
 
-    // URL decode (dashboarddan kelganda encode bo‘lishi mumkin)
+    // URL decode
     const raw = typeof uri === "string" ? uri : "";
     const fileUri = raw ? decodeURIComponent(raw) : "";
 
-    // HTTP/HTTPS bo‘lsa — embed qilish mumkin
     const isHttp = useMemo(() => /^https?:/i.test(fileUri), [fileUri]);
+    const isFile = useMemo(() => /^file:/i.test(fileUri), [fileUri]);
 
-    // Google Viewer orqali yengil embed (http/https bo‘lsa)
     const viewerUrl = useMemo(
         () =>
             isHttp
-                ? `https://drive.google.com/viewerng/viewer?embedded=true&url=${encodeURIComponent(
-                    fileUri
-                )}`
+                ? `https://drive.google.com/viewerng/viewer?embedded=true&url=${encodeURIComponent(fileUri)}`
                 : null,
         [isHttp, fileUri]
     );
 
-    const openExternally = () => {
+    // Android WebView lokal PDF-ni render qilmaydi, iOS esa file:// ni ko‘rsatadi
+    const canInline = useMemo(() => {
+        if (!fileUri) return false;
+        if (isHttp) return true;                     // Google Viewer
+        if (isFile && Platform.OS === "ios") return true; // iOS file:// inline
+        return false;
+    }, [fileUri, isHttp, isFile]);
+
+    const openExternally = async () => {
         if (!fileUri) return;
+
         try {
-            Linking.openURL(fileUri);
-        } catch { }
+            if (Platform.OS === "android" && isFile) {
+                // 1) file:// -> content://
+                const contentUri = await FileSystem.getContentUriAsync(fileUri);
+                // 2) Intent ACTION_VIEW bilan ochish (pdf type) + read permission
+                await IntentLauncher.startActivityAsync("android.intent.action.VIEW", {
+                    data: contentUri,
+                    type: "application/pdf",
+                    flags: 1, // FLAG_GRANT_READ_URI_PERMISSION
+                });
+                return;
+            }
+
+            // iOS yoki http(s) — Linking yetarli
+            await Linking.openURL(fileUri);
+        } catch (e) {
+            // fallback: share ochib beramiz
+            try {
+                await Linking.openURL(fileUri);
+            } catch { }
+        }
     };
 
     return (
@@ -69,14 +94,10 @@ export default function ReportViewer() {
                     <Text style={{ fontWeight: "800" }}>Orqaga</Text>
                 </TouchableOpacity>
 
-                <Text
-                    style={{ fontWeight: "900", fontSize: 16, flex: 1 }}
-                    numberOfLines={1}
-                >
+                <Text style={{ fontWeight: "900", fontSize: 16, flex: 1 }} numberOfLines={1}>
                     {title || "Hisobot (PDF)"}
                 </Text>
 
-                {/* Har doim ochish tugmasi — local file bo'lsa ayniqsa kerak bo'ladi */}
                 {!!fileUri && (
                     <TouchableOpacity onPress={openExternally}>
                         <Text style={{ color: BRAND, fontWeight: "800" }}>Open</Text>
@@ -87,36 +108,32 @@ export default function ReportViewer() {
             {/* Body */}
             <View style={{ flex: 1 }}>
                 {!fileUri ? (
-                    <View
-                        style={{ flex: 1, alignItems: "center", justifyContent: "center" }}
-                    >
+                    <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
                         <Text>PDF topilmadi</Text>
                     </View>
-                ) : isHttp && viewerUrl ? (
-                    // HTTP/HTTPS: WebView + Google viewer
-                    <WebView style={{ flex: 1 }} source={{ uri: viewerUrl }} />
+                ) : canInline ? (
+                    isHttp && viewerUrl ? (
+                        <WebView style={{ flex: 1 }} source={{ uri: viewerUrl }} />
+                    ) : (
+                        // iOS: file:// ni inline ko‘rsatamiz
+                        <WebView
+                            style={{ flex: 1 }}
+                            source={{ uri: fileUri }}
+                            originWhitelist={["*"]}
+                            allowingReadAccessToURL={fileUri}
+                        />
+                    )
                 ) : (
-                    // file:// yoki no-HTTP — Expo Go’da embed qilib bo‘lmaydi, tashqarida ochishga yo‘naltiramiz
+                    // Android file:// — ichida ko‘rsatmaymiz, Open orqali tashqarida ochiladi
                     <View style={{ flex: 1, padding: 16, gap: 12 }}>
                         <Text style={{ fontSize: 16 }}>
-                            Bu faylni Expo Go ichida ko‘rsatib bo‘lmadi. "Open" tugmasi orqali
-                            tashqi ilovada oching.
+                            Bu faylni bu sahifada ko‘rsatib bo‘lmadi. "Open" tugmasi orqali tashqi ilovada oching.
                         </Text>
                         <TouchableOpacity
                             onPress={openExternally}
-                            style={{
-                                backgroundColor: BRAND,
-                                paddingVertical: 12,
-                                borderRadius: 12,
-                            }}
+                            style={{ backgroundColor: BRAND, paddingVertical: 12, borderRadius: 12 }}
                         >
-                            <Text
-                                style={{
-                                    color: "#fff",
-                                    fontWeight: "800",
-                                    textAlign: "center",
-                                }}
-                            >
+                            <Text style={{ color: "#fff", fontWeight: "800", textAlign: "center" }}>
                                 Tashqi ilovada ochish
                             </Text>
                         </TouchableOpacity>

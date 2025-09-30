@@ -95,9 +95,7 @@ export default function SummaryScreen() {
     // Realtime: EXPENSES → local expenses yangilash (oy bo‘yicha)
     useEffect(() => {
         if (chExpensesRef.current) {
-            try {
-                supabase.removeChannel(chExpensesRef.current as any);
-            } catch { }
+            try { supabase.removeChannel(chExpensesRef.current as any); } catch { }
             chExpensesRef.current = null;
         }
 
@@ -109,13 +107,8 @@ export default function SummaryScreen() {
                 (payload) => {
                     const newYm = toYm((payload.new as any)?.created_at);
                     const oldYm = toYm((payload.old as any)?.created_at);
-                    if (!newYm && !oldYm) {
-                        fetchExpenses();
-                        return;
-                    }
-                    if (newYm === month || oldYm === month) {
-                        fetchExpenses();
-                    }
+                    if (!newYm && !oldYm) { fetchExpenses(); return; }
+                    if (newYm === month || oldYm === month) { fetchExpenses(); }
                 }
             )
             .subscribe();
@@ -123,9 +116,7 @@ export default function SummaryScreen() {
         chExpensesRef.current = ch;
         return () => {
             if (chExpensesRef.current) {
-                try {
-                    supabase.removeChannel(chExpensesRef.current as any);
-                } catch { }
+                try { supabase.removeChannel(chExpensesRef.current as any); } catch { }
                 chExpensesRef.current = null;
             }
         };
@@ -134,9 +125,7 @@ export default function SummaryScreen() {
     // Realtime: MONTHLY_STORE_SUMMARY → jadvalni qayta yuklash
     useEffect(() => {
         if (chMssRef.current) {
-            try {
-                supabase.removeChannel(chMssRef.current as any);
-            } catch { }
+            try { supabase.removeChannel(chMssRef.current as any); } catch { }
             chMssRef.current = null;
         }
 
@@ -144,12 +133,7 @@ export default function SummaryScreen() {
             .channel(`mss-realtime-${month}`)
             .on(
                 "postgres_changes",
-                {
-                    event: "*",
-                    schema: "public",
-                    table: "monthly_store_summary",
-                    filter: `ym=eq.${month}`,
-                },
+                { event: "*", schema: "public", table: "monthly_store_summary", filter: `ym=eq.${month}` },
                 () => fetchMssForMonth(month)
             )
             .subscribe();
@@ -157,9 +141,7 @@ export default function SummaryScreen() {
         chMssRef.current = ch;
         return () => {
             if (chMssRef.current) {
-                try {
-                    supabase.removeChannel(chMssRef.current as any);
-                } catch { }
+                try { supabase.removeChannel(chMssRef.current as any); } catch { }
                 chMssRef.current = null;
             }
         };
@@ -189,18 +171,27 @@ export default function SummaryScreen() {
             .sort((a, b) => a.storeName.localeCompare(b.storeName));
     }, [mss, stores]);
 
-    // --- Faqat do‘kon (shop/market) xarajatlari — clientdan, tanlangan oy bo‘yicha
+    // --- Faqat do‘kon (shop) xarajatlari — oy bo‘yicha
     const sumExpensesMonth = useMemo(() => {
         let s = 0;
         for (const e of expenses) {
             if (!inMonth(e.created_at, month)) continue;
-
-            // faqat kind='shop' bo‘lsin
             const kind = String((e as any).kind ?? "").toLowerCase();
             if (kind !== "shop") continue;
+            const amount = Number((e as any).amount ?? (Number(e.qty ?? 0) * Number(e.price ?? 0))) || 0;
+            s += amount;
+        }
+        return s;
+    }, [expenses, month]);
 
-            const amount =
-                Number((e as any).amount ?? (Number(e.qty ?? 0) * Number(e.price ?? 0))) || 0;
+    // --- Bank + Oilaviy xarajatlar — oy bo‘yicha
+    const sumOtherExpensesMonth = useMemo(() => {
+        let s = 0;
+        for (const e of expenses) {
+            if (!inMonth(e.created_at, month)) continue;
+            const kind = String((e as any).kind ?? "").toLowerCase();
+            if (kind !== "bank" && kind !== "family") continue;
+            const amount = Number((e as any).amount ?? (Number(e.qty ?? 0) * Number(e.price ?? 0))) || 0;
             s += amount;
         }
         return s;
@@ -216,11 +207,24 @@ export default function SummaryScreen() {
             t.debt += r.debt;
         }
         const netProfit = t.sales - t.returns - sumExpensesMonth;
-        return { ...t, expenses: sumExpensesMonth, netProfit };
-    }, [rows, sumExpensesMonth]);
+        return {
+            ...t,
+            expenses: sumExpensesMonth,           // do‘kon xarajatlari
+            otherExpenses: sumOtherExpensesMonth, // bank + oilaviy
+            netProfit,
+        };
+    }, [rows, sumExpensesMonth, sumOtherExpensesMonth]);
 
     const netProfitColor =
         totals.netProfit > 0 ? "#10B981" : totals.netProfit < 0 ? "#EF4444" : C.text;
+
+    // qolgan pul = sof foyda − (bank+oilaviy)
+    const remaining = useMemo(
+        () => totals.netProfit - (totals.otherExpenses || 0),
+        [totals.netProfit, totals.otherExpenses]
+    );
+    const remainingBg = remaining > 0 ? "#10B981" : remaining < 0 ? "#EF4444" : "#6B7280";
+    const remainingText = "#FFFFFF";
 
     // PDF
     const [creatingPdf, setCreatingPdf] = useState(false);
@@ -246,12 +250,17 @@ export default function SummaryScreen() {
                     debt: totals.debt,
                     expenses: totals.expenses,
                     netProfit: totals.netProfit,
+                    otherExpenses: totals.otherExpenses,
+                    remaining: remaining,
                 },
                 source: "summary",
                 fileName: `Umumiy_${month}.pdf`,
             });
             setPdfName(res.name);
             setPdfUri(res.uri);
+
+            // ⛔️ ENDILIKDA AUTO-OPEN YO'Q
+            // Faqat tugmalar orqali ochiladi (Ochish -> report-viewer)
         } finally {
             setCreatingPdf(false);
         }
@@ -268,15 +277,14 @@ export default function SummaryScreen() {
     };
     const onOpenExternal = async () => {
         if (!pdfUri) return;
-        try {
-            await Linking.openURL(pdfUri);
-        } catch { }
+        try { await Linking.openURL(pdfUri); } catch { }
     };
+    // “Ochish” tugmasi bosilganda viewer’ga olib boramiz (o'zgarmaydi):
     const openFullScreen = () => {
         if (!pdfUri) return;
         router.push({
             pathname: "/(main)/admin/report-viewer",
-            params: { uri: pdfUri, title: pdfName },
+            params: { uri: encodeURIComponent(pdfUri), title: pdfName },
         });
     };
 
@@ -294,29 +302,17 @@ export default function SummaryScreen() {
             if (hasSAF) {
                 const saf = (FileSystem as any).StorageAccessFramework;
                 const perm = await saf.requestDirectoryPermissionsAsync();
-                if (!perm.granted) {
-                    alert("Ruxsat berilmadi.");
-                    return;
-                }
+                if (!perm.granted) { alert("Ruxsat berilmadi."); return; }
                 const name = (pdfName || "Hisobot").toString().replace(/\.pdf$/i, "");
-                const outUri = await saf.createFileAsync(
-                    perm.directoryUri,
-                    name,
-                    "application/pdf"
-                );
+                const outUri = await saf.createFileAsync(perm.directoryUri, name, "application/pdf");
                 const b64 = await FileSystemLegacy.readAsStringAsync(pdfUri, {
                     encoding: FileSystemLegacy.EncodingType.Base64,
                 });
-                await FileSystem.writeAsStringAsync(outUri, b64, {
-                    encoding: "base64" as any,
-                });
+                await FileSystem.writeAsStringAsync(outUri, b64, { encoding: "base64" as any });
                 alert("Fayl yuklab olindi.");
             } else {
                 // iOS yoki SAF yo‘q → ulashish oynasi
-                await Sharing.shareAsync(pdfUri, {
-                    mimeType: "application/pdf",
-                    dialogTitle: pdfName || "Hisobot",
-                });
+                await Sharing.shareAsync(pdfUri, { mimeType: "application/pdf", dialogTitle: pdfName || "Hisobot" });
             }
         } catch (e) {
             console.warn("download error", e);
@@ -342,11 +338,7 @@ export default function SummaryScreen() {
             <Select value={month} onChange={setMonth} options={monthOpts} style={{ marginTop: 6 }} />
 
             <Card style={{ marginTop: 12, padding: 0 }}>
-                <ScrollView
-                    horizontal
-                    showsHorizontalScrollIndicator
-                    contentContainerStyle={{ minWidth: 760 }}
-                >
+                <ScrollView horizontal showsHorizontalScrollIndicator contentContainerStyle={{ minWidth: 760 }}>
                     <View style={{ width: "100%" }}>
                         <View
                             style={{
@@ -365,16 +357,11 @@ export default function SummaryScreen() {
 
                         {rows.length === 0 ? (
                             <View style={{ padding: 14 }}>
-                                <Text style={{ color: C.muted }}>
-                                    Tanlangan oyda ma'lumot yo‘q
-                                </Text>
+                                <Text style={{ color: C.muted }}>Tanlangan oyda ma'lumot yo‘q</Text>
                             </View>
                         ) : (
                             rows.map((r) => (
-                                <View
-                                    key={r.storeId}
-                                    style={{ flexDirection: "row", borderTopWidth: 1, borderColor: C.border }}
-                                >
+                                <View key={r.storeId} style={{ flexDirection: "row", borderTopWidth: 1, borderColor: C.border }}>
                                     <Cell label={r.storeName} flex />
                                     <Cell label={fmt(r.totalSales)} right width={140} />
                                     <Cell label={fmt(r.totalReturns)} right width={140} />
@@ -402,26 +389,33 @@ export default function SummaryScreen() {
                 </ScrollView>
             </Card>
 
+            {/* Yuqoridagi ikkita karta */}
             <View style={{ flexDirection: "row", gap: 12, marginTop: 12 }}>
                 <Card style={{ flex: 1 }}>
-                    <Text style={{ color: C.muted, fontWeight: "800" }}>
-                        Umumiy xarajat (faqat do‘kon)
-                    </Text>
-                    <Text style={{ fontSize: 18, fontWeight: "900", marginTop: 6 }}>
-                        {fmt(totals.expenses)} so‘m
-                    </Text>
+                    <Text style={{ color: C.muted, fontWeight: "800" }}>Umumiy xarajat (faqat do‘kon)</Text>
+                    <Text style={{ fontSize: 18, fontWeight: "900", marginTop: 6 }}>{fmt(totals.expenses)} so‘m</Text>
                 </Card>
                 <Card style={{ flex: 1 }}>
                     <Text style={{ color: C.muted, fontWeight: "800" }}>Sof foyda</Text>
-                    <Text
-                        style={{
-                            fontSize: 18,
-                            fontWeight: "900",
-                            marginTop: 6,
-                            color: netProfitColor,
-                        }}
-                    >
+                    <Text style={{ fontSize: 18, fontWeight: "900", marginTop: 6, color: netProfitColor }}>
                         {fmt(totals.netProfit)} so‘m
+                    </Text>
+                </Card>
+            </View>
+
+            {/* Qo‘shimcha ikki karta */}
+            <View style={{ flexDirection: "row", gap: 12, marginTop: 12 }}>
+                <Card style={{ flex: 1 }}>
+                    <Text style={{ color: C.muted, fontWeight: "800" }}>Qolgan xarajatlar (bank + oilaviy)</Text>
+                    <Text style={{ fontSize: 18, fontWeight: "900", marginTop: 6 }}>
+                        {fmt(totals.otherExpenses || 0)} so‘m
+                    </Text>
+                </Card>
+
+                <Card style={{ flex: 1, backgroundColor: remainingBg, borderColor: "transparent" }}>
+                    <Text style={{ color: remainingText, fontWeight: "800" }}>Qolgan pul</Text>
+                    <Text style={{ fontSize: 18, fontWeight: "900", marginTop: 6, color: remainingText }}>
+                        {fmt(remaining)} so‘m
                     </Text>
                 </Card>
             </View>
@@ -430,31 +424,20 @@ export default function SummaryScreen() {
                 <Card style={{ marginTop: 12 }}>
                     <Text style={{ fontWeight: "900" }}>{pdfName}</Text>
                     <TouchableOpacity onPress={onOpenExternal} activeOpacity={0.7}>
-                        <Text
-                            style={{
-                                color: "#2563EB",
-                                marginTop: 6,
-                                textDecorationLine: "underline",
-                            }}
-                            numberOfLines={2}
-                        >
+                        <Text style={{ color: "#2563EB", marginTop: 6, textDecorationLine: "underline" }} numberOfLines={2}>
                             {pdfUri}
                         </Text>
                     </TouchableOpacity>
 
-                    {/* Tepada: Ulashish + Ochish */}
                     <View style={{ flexDirection: "row", gap: 10, marginTop: 12 }}>
                         <Button title="Ulashish" onPress={onShare} style={{ flex: 1 }} tone="success" />
                         <Button title="Ochish" onPress={openFullScreen} style={{ flex: 1 }} />
                     </View>
 
-                    {/* Pastda: Bekor + Yuklab olish */}
                     <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
                         <Button
                             title="Bekor qilish"
-                            onPress={() => {
-                                setPdfUri(null);
-                            }}
+                            onPress={() => { setPdfUri(null); }}
                             tone="neutral"
                             style={{ flex: 1 }}
                         />
@@ -467,18 +450,8 @@ export default function SummaryScreen() {
 }
 
 function Cell({
-    label,
-    bold,
-    right,
-    width,
-    flex,
-}: {
-    label: string;
-    bold?: boolean;
-    right?: boolean;
-    width?: number;
-    flex?: boolean;
-}) {
+    label, bold, right, width, flex,
+}: { label: string; bold?: boolean; right?: boolean; width?: number; flex?: boolean; }) {
     return (
         <View
             style={{
