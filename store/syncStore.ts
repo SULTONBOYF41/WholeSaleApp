@@ -3,11 +3,6 @@ import { useAppStore } from "@/store/appStore";
 import NetInfo from "@react-native-community/netinfo";
 import { create } from "zustand";
 
-/**
- * Tarmoq holati (online/offline) va online bo‘lganda push→pull orkestratsiya.
- * Supabase’ga to‘g‘ridan-to‘g‘ri CRUD qilmaydi — barchasi appStore ichida.
- */
-
 type SyncState = {
     online: boolean;
     lastChangeAt: number;
@@ -15,12 +10,11 @@ type SyncState = {
     setOnline: (v: boolean) => void;
     initNetWatcher: () => void;
 
-    // Orkestratsiya helperlari:
     pushAndPullNow: () => Promise<void>;
 
-    // Backward-compat (no-op yoki appStore orqali):
+    // backward-compat
     load: () => Promise<void>;
-    pushSale: (payload: any) => Promise<void>;
+    pushSale: (_payload: any) => Promise<void>;
     processQueue: () => Promise<void>;
     clearAll: () => Promise<void>;
 };
@@ -35,7 +29,7 @@ export const useSyncStore = create<SyncState>()((set, get) => ({
         const prev = get().online;
         set({ online: v, lastChangeAt: Date.now() });
 
-        // Offline -> Online: avtomatik push→pull
+        // Offline -> Online bo‘lsa: push -> pull
         if (!prev && v) {
             get().pushAndPullNow().catch(() => { });
         }
@@ -45,50 +39,28 @@ export const useSyncStore = create<SyncState>()((set, get) => ({
         if (watcherStarted) return;
         watcherStarted = true;
 
-        // Boshlang‘ich holat
         NetInfo.fetch().then((state) => {
             const on = !!state.isConnected && (state.isInternetReachable ?? true);
             get().setOnline(on);
         });
 
-        // Listener
         NetInfo.addEventListener((state) => {
             const on = !!state.isConnected && (state.isInternetReachable ?? true);
             if (on !== get().online) get().setOnline(on);
         });
     },
 
-    // >>> YANGI: push→pull orkestratsiyasi (AddStore bundan foydalanadi)
     async pushAndPullNow() {
         const { pushNow, pullNow } = useAppStore.getState();
-        try {
-            await pushNow();       // lokal queue -> server (push)
-        } catch {
-            // offline yoki boshqa xatolar bo‘lishi mumkin — appStore o‘zi handle qiladi
-        }
-        try {
-            await pullNow();       // so‘ng serverdan yangi snapshot (pull)
-        } catch {
-            // ignorable
-        }
+        try { await pushNow(); } catch { }
+        try { await pullNow(); } catch { }
     },
 
-    // === Backward-compat helperlar ===
-    async load() {
-        return;
-    },
-
-    async pushSale(_payload: any) {
-        // NO-OP: boshqa sahifa boshqaradi
-        return;
-    },
-
+    async load() { return; },
+    async pushSale(_payload) { return; },
     async processQueue() {
         const { pushNow } = useAppStore.getState();
         try { await pushNow(); } catch { }
     },
-
-    async clearAll() {
-        return;
-    },
+    async clearAll() { return; },
 }));
