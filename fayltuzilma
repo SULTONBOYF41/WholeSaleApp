@@ -1,53 +1,105 @@
-app/
-├─ _layout.tsx                        # Root (expo-router) – Reanimated/Gesture handler provider
-├─ index.tsx                          # Auth tekshiradi → (auth)/login yoki (main)/home
-├─ (auth)/
-│  └─ login.tsx                       # Lokal sign-in (bitta login/parol)
-├─ (main)/
-│  ├─ _layout.tsx                     # Header + chap menyu (Филиаллар/Дўконлар/Админ)
-│  ├─ home.tsx                        # Default – “менюни очинг” ekrani
-│  ├─ admin/
-│  │  ├─ add-store.tsx                # Филиал/Дўкон қўшиш (radio, kategoriya narxlari, CRUD ro‘yxat)
-│  │  ├─ catalog.tsx                  # Каталог: nom + filial/do‘kon narx, ro‘yxat, CRUD
+WholeSaleApp/
+├─ .expo/
+├─ .vscode/
+
+├─ app/                         # Expo Router (screens)
+│  ├─ (auth)/
+│  │  └─ login.tsx
+│  │
+│  ├─ (main)/
+│  │  ├─ admin/
+│  │  │  ├─ add-store.tsx
+│  │  │  ├─ catalog.tsx
+│  │  │  ├─ report-viewer.tsx
+│  │  │  └─ summary.tsx
+│  │  │
+│  │  ├─ expenses/
+│  │  │  ├─ _layout.tsx
+│  │  │  ├─ bank.tsx
+│  │  │  ├─ family.tsx
+│  │  │  ├─ index.tsx
+│  │  │  ├─ report.tsx
+│  │  │  └─ shop.tsx
+│  │  │
+│  │  ├─ _layout.tsx
+│  │  ├─ home.tsx
+│  │  ├─ monitoring.tsx
+│  │  ├─ report.tsx
+│  │  ├─ returns.tsx
+│  │  └─ sales.tsx
+│  │
+│  ├─ _layout.tsx
+│  └─ index.tsx
+│
+├─ assets/                      # rasmlar, ikonlar
+│
+├─ components/
 │  ├─ expenses/
-│  │  ├─ _layout.tsx                
-│  │  ├─ bank.tsx  
-│  │  ├─ family.tsx  
-│  │  ├─ index.tsx  
-│  │  ├─ report.tsx  
-│  │  ├─ shop.tsx  
-│  └─ store/
-│     └─ [id]/
-│        ├─ _layout.tsx               # Pastki fixed tablar: Дашборд / Сотув / Қайтариш
-│        ├─ dashboard.tsx             # Ko‘rsatkichlar (storeId bo‘yicha)
-│        ├─ sales.tsx                 # Сотув: forma + addSale
-│        ├─ history.tsx
-│        └─ returns.tsx               # Қайтариш: forma + addReturn
-components/
-├─ expenses/
-│  ├─ ExpenseComposer.tsx                     
-│  ├─ ExpenseRow.tsx   
-│  ├─ HistoryCard.tsx  
-│  ├─ ReportCards.tsx  
-├─ UI.tsx 
-├─ NetBanner.tsx 
-├─ Toast.tsx 
-├─ PdfModal.tsx 
-lib/
-├─ supabase.ts                         # Supabase client (authsiz, realtime yoqilgan)
-├─ net.ts
-├─ pdf.ts
-├─ device.ts  
-├─ pricing.ts  
-├─ local-auth.ts                       # Lokal sign-in (AsyncStorage’da flag)
-└─ storage.ts                          # AsyncStorage helper’lar (getJSON/setJSON, kalitlar)
-store/
-├─ inventoryStore.ts
-├─ syncStore.ts
-├─ expensesStore.ts
-├─ toastStore.ts
-└─ appStore.ts                         # Barcha state/CRUD/Queue + Push/Pull/Realtime (Zustand)
-types/
-└─ index.ts                            # Tiplar: Store/Category/Product/Sale/Return/QueueItem va hok.
-utils/
-├─ format.ts                           # (ixtiyoriy) formatMoney, date helpers…
+│  │  ├─ ExpenseComposer.tsx
+│  │  ├─ ExpenseRow.tsx
+│  │  ├─ HistoryCard.tsx
+│  │  └─ ReportCards.tsx
+│  │
+│  └─ ui/
+│     ├─ IconSymbol.tsx
+│     ├─ IconSymbol.ios.tsx
+│     ├─ TabBar.tsx
+│     ├─ TabBarBackground.tsx
+│     ├─ TabBarBackground.ios.tsx
+│     ├─ Collapsible.tsx
+│     ├─ ExternalLink.tsx
+│     ├─ HapticTab.tsx
+│     ├─ HelloWave.tsx
+│     ├─ NetBanner.tsx
+│     ├─ ParallaxScrollView.tsx
+│     ├─ StorePicker.tsx
+│     ├─ ThemedText.tsx
+│     ├─ ThemedView.tsx
+│     ├─ Toast.tsx
+│     └─ UI.tsx
+│
+├─ constants/
+│  └─ Colors.ts
+│
+├─ hooks/
+│  ├─ useColorScheme.ts
+│  ├─ useColorScheme.web.ts
+│  └─ useThemeColor.ts
+│
+├─ lib/                         # core logic (MUHIM)
+│  ├─ device.ts
+│  ├─ local-auth.ts
+│  ├─ net.ts
+│  ├─ pdf.ts
+│  ├─ pricing.ts
+│  ├─ storage.ts
+│  └─ supabase.ts               # ❗ hozirgi backend bog‘lanish
+│
+├─ scripts/
+│  └─ reset-project.js
+│
+├─ store/                       # global state (Zustand)
+│  ├─ appStore.ts
+│  ├─ expensesStore.ts
+│  ├─ inventoryStore.ts
+│  ├─ syncStore.ts
+│  └─ toastStore.ts
+│
+├─ types/
+│  └─ index.ts
+│
+├─ utils/
+│  └─ format.ts
+│
+├─ .env                         # ❗ secrets (serverga alohida)
+├─ .gitignore
+├─ app.config.ts
+├─ babel.config.js
+├─ eas.json
+├─ eslint.config.js
+├─ expo-env.d.ts
+├─ fayltuzilma                  # (sen yozgan fayl, ehtimol docs)
+├─ package.json
+├─ package-lock.json
+├─ README.md
+└─ tsconfig.json
