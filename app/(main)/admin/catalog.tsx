@@ -1,7 +1,6 @@
 // app/(main)/admin/catalog.tsx
 import Toast from "@/components/Toast";
 import { Button, C, Card, Chip, H1, H2, Input } from "@/components/UI";
-import { supabase } from "@/lib/supabase";
 import { useAppStore } from "@/store/appStore";
 import { useSyncStore } from "@/store/syncStore";
 import { useToastStore } from "@/store/toastStore";
@@ -13,7 +12,6 @@ import { Alert, FlatList, Text, TouchableOpacity, View } from "react-native";
 type Target = "branch" | "market" | "both";
 const PRIMARY = "#770E13";
 
-// RFC4122 v4 (soddalashtirilgan) — add-store.tsx dagi bilan bir xil
 function uuidv4() {
     return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
         const r = (Math.random() * 16) | 0;
@@ -22,11 +20,13 @@ function uuidv4() {
     });
 }
 
-
 export default function Catalog() {
     const products = useAppStore((s) => s.products);
     const upsertProduct = useAppStore((s) => s.upsertProduct);
     const removeProduct = useAppStore((s) => s.removeProduct);
+
+    const pullNow = useAppStore((s) => s.pullNow);
+    const pushNow = useAppStore((s) => s.pushNow);
 
     const online = useSyncStore((s) => s.online);
     const toast = useToastStore();
@@ -47,11 +47,21 @@ export default function Catalog() {
         setEditing(null);
     };
 
+    const syncNow = async () => {
+        const maybe = (useSyncStore.getState() as any).pushAndPullNow;
+        if (typeof maybe === "function") return maybe();
+        try {
+            await pushNow();
+        } catch { }
+        try {
+            await pullNow();
+        } catch { }
+    };
+
     const submit = async () => {
         const trimmed = name.trim();
         if (!trimmed) return;
 
-        // Narxlarni tayyorlab olamiz
         let pb: number | null | undefined = undefined;
         let pm: number | null | undefined = undefined;
 
@@ -64,67 +74,33 @@ export default function Catalog() {
             pm = target === "market" ? v : (editing?.priceMarket ?? null);
         }
 
-        // ONLINE: bevosita Supabase'ga yozamiz (id'ni ALBATTA yuboramiz!)
-        if (online) {
-            toast.showLoading(editing ? "Yangilanmoqda…" : "Saqlanmoqda…");
-            try {
-                const productId = editing?.id ?? uuidv4(); // <-- MUHIM: yangi bo'lsa id yaratamiz
-
-                const row = {
-                    id: productId,
-                    name: trimmed,
-                    price_branch: pb ?? null,
-                    price_market: pm ?? null,
-                };
-
-                const { error } = await supabase
-                    .from("products")
-                    .upsert(row, { onConflict: "id" });
-
-                if (error) throw error;
-
-                // snapshotni yangilaymiz
-                try { await useAppStore.getState().pullNow(); } catch { }
-
-                toast.hide();
-                toast.show(editing ? "Tahrir saqlandi" : "Mahsulot qo‘shildi");
-                resetForm();
-            } catch (e: any) {
-                toast.hide();
-                toast.show(e?.message || "Saqlashda xato");
-            }
-            return;
-        }
-
-        // OFFLINE: lokal + queue (sizdagi oqim o'zgarishsiz qoladi)
-        toast.showLoading("Offline: navbatga yozildi");
+        toast.showLoading(editing ? "Yangilanmoqda…" : "Saqlanmoqda…");
         try {
+            const id = editing?.id ?? uuidv4();
+
+            // ✅ avval local
             await upsertProduct({
-                id: editing?.id, // offline oqim o'zi id beradi (pr-... format)
+                id,
                 name: trimmed,
                 priceBranch: pb ?? undefined,
                 priceMarket: pm ?? undefined,
             });
 
-            // tezroq ko‘rinishi uchun push→pull urinib ko‘rish mumkin (ixtiyoriy)
-            try { await useAppStore.getState().pushNow(); } catch { }
-            try { await useAppStore.getState().pullNow(); } catch { }
+            // ✅ online bo‘lsa push/pull
+            if (online) await syncNow();
 
             toast.hide();
-            toast.show(editing ? "Tahrir navbatga yozildi (offline)" : "Qo‘shish navbatga yozildi (offline)");
+            toast.show(editing ? "Tahrir saqlandi" : "Mahsulot qo‘shildi");
             resetForm();
-        } catch {
+        } catch (e: any) {
             toast.hide();
-            toast.show("Offline navbatga yozishda xato");
+            toast.show(e?.message || "Saqlashda xato");
         }
     };
-
-
 
     const startEdit = (p: Product) => {
         setEditing(p);
         setName(p?.name ?? "");
-        // Edit UX: ikkala narx maydonini ko‘rsatamiz
         setTarget("both");
         setPrice("");
         setPriceBranch(p?.priceBranch != null ? String(p.priceBranch) : "");
@@ -138,67 +114,51 @@ export default function Catalog() {
                 text: "Ҳа",
                 style: "destructive",
                 onPress: async () => {
-                    // 1) Optimistik: darrov lokal ro‘yxatdan o‘chirib, navbatga yozamiz
-                    //    (UI darhol yangilanadi)
                     try {
+                        toast.showLoading("O‘chirilmoqda…");
                         await removeProduct(id);
-                    } catch { }
 
-                    // Agar hozir tahrirlayotgan bo‘lsak, formani tozalaymiz
-                    if (editing?.id === id) {
-                        resetForm();
-                    }
+                        if (editing?.id === id) resetForm();
 
-                    // 2) Onlayn bo‘lsa – bevosita serverdan ham o‘chirishga harakat qilamiz
-                    //    (muvaffaqiyatli bo‘lsa – pull; bo‘lmasa – queue allaqachon bor)
-                    if (online) {
-                        toast.show("O‘chirilmoqda…");
-                        try {
-                            const { error } = await supabase.from("products").delete().eq("id", id);
-                            if (error) throw error;
-                        } catch {
-                            // ignore – pushNow navbatdagi product_remove bilan urinishda davom etadi
-                        }
+                        if (online) await syncNow();
 
-                        // 3) Navbatni tezroq tozalash va snapshotni yangilash
-                        try { await useAppStore.getState().pushNow(); } catch { }
-                        try { await useAppStore.getState().pullNow(); } catch { }
+                        toast.hide();
+                        toast.show("O‘chirildi");
+                    } catch {
+                        toast.hide();
+                        toast.show("O‘chirishda xato");
                     }
                 },
             },
         ]);
 
-
-    // --- Realtime + polling (o‘zgarmadi) ---
+    // ✅ polling (realtime o‘rniga)
     const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
     useEffect(() => {
-        useAppStore.getState().startPull().catch(() => { });
-        useAppStore.getState().pullNow().catch(() => { });
-
-        const ch = supabase
-            .channel("rt-products")
-            .on(
-                "postgres_changes",
-                { event: "*", schema: "public", table: "products" },
-                () => useAppStore.getState().pullNow().catch(() => { })
-            )
-            .subscribe();
-
-        pollRef.current = setInterval(() => {
-            useAppStore.getState().pullNow().catch(() => { });
-        }, 15000);
-
-        return () => {
-            if (pollRef.current !== null) {
+        if (online) {
+            // kirishda sync
+            syncNow().catch(() => { });
+            if (!pollRef.current) {
+                pollRef.current = setInterval(() => {
+                    useAppStore.getState().pullNow().catch(() => { });
+                }, 15000);
+            }
+        } else {
+            if (pollRef.current) {
                 clearInterval(pollRef.current);
                 pollRef.current = null;
             }
-            supabase.removeChannel(ch);
+        }
+        return () => {
+            if (pollRef.current) {
+                clearInterval(pollRef.current);
+                pollRef.current = null;
+            }
         };
-    }, []);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [online]);
 
-    // Xavfsiz sort
     const listData = useMemo(
         () =>
             [...products].sort((a: any, b: any) =>
@@ -246,7 +206,11 @@ export default function Catalog() {
                     </>
                 )}
 
-                <Button onPress={submit} title={editing ? "Сақлаш" : "Қўшиш"} style={{ marginTop: 8, backgroundColor: PRIMARY }} />
+                <Button
+                    onPress={submit}
+                    title={editing ? "Сақлаш" : "Қўшиш"}
+                    style={{ marginTop: 8, backgroundColor: PRIMARY }}
+                />
 
                 <H2 style={{ marginTop: 10 }}>Маҳсулотлар</H2>
             </View>
@@ -267,13 +231,8 @@ export default function Catalog() {
                     return (
                         <Card style={{ padding: 12 }}>
                             <View style={{ flexDirection: "row", alignItems: "center" }}>
-                                {/* Chap: nom + narxlar */}
                                 <View style={{ flex: 1, paddingRight: 10 }}>
-                                    <Text
-                                        style={{ fontWeight: "800", color: C.text }}
-                                        numberOfLines={1}
-                                        ellipsizeMode="tail"
-                                    >
+                                    <Text style={{ fontWeight: "800", color: C.text }} numberOfLines={1} ellipsizeMode="tail">
                                         {displayName}
                                     </Text>
                                     <Text style={{ color: C.muted, marginTop: 4 }}>
@@ -281,7 +240,6 @@ export default function Catalog() {
                                     </Text>
                                 </View>
 
-                                {/* O‘ng: edit / delete */}
                                 <View style={{ flexDirection: "row", gap: 10 }}>
                                     <TouchableOpacity
                                         onPress={() => startEdit(item)}

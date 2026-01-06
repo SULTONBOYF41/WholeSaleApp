@@ -1,7 +1,6 @@
 // app/(main)/admin/summary.tsx
 import { Button, C, Card, H1, H2, Select } from "@/components/UI";
 import { exportMonthlySummaryPdf } from "@/lib/pdf";
-import { supabase } from "@/lib/supabase";
 import { useAppStore } from "@/store/appStore";
 import { useExpensesStore } from "@/store/expensesStore";
 import * as FileSystem from "expo-file-system";
@@ -9,8 +8,9 @@ import * as FileSystemLegacy from "expo-file-system/legacy";
 import * as Linking from "expo-linking";
 import { useRouter } from "expo-router";
 import * as Sharing from "expo-sharing";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Platform, ScrollView, Text, TouchableOpacity, View } from "react-native";
+import { useSyncStore } from "@/store/syncStore";
 
 function monthOptions(lastN = 24) {
     const now = new Date();
@@ -23,131 +23,87 @@ function monthOptions(lastN = 24) {
     }
     return arr;
 }
-function inMonth(ts: number | string, ym: string) {
-    const d = new Date(ts);
-    const [y, m] = ym.split("-").map(Number);
-    return d.getFullYear() === y && d.getMonth() + 1 === m;
-}
-const toYm = (ts?: string | number | null) => {
-    if (!ts) return null;
-    const d = new Date(ts);
-    const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-    return ym;
-};
 
-type MSSRow = {
-    ym: string;
-    store_id: string;
-    total_sales: number;
-    total_returns: number;
-    total_cash: number;
-    debt: number;
-};
+function ymOf(ts: number | string | Date) {
+    const d = new Date(ts as any);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function inMonth(ts: number | string, ym: string) {
+    return ymOf(ts) === ym;
+}
+
+/** Qarzni oyma-oy ko‘chirib (carry) hisoblash: shu oyga qadar jami net */
+function computeDebtWithCarry(
+    allSales: { storeId: any; created_at: any; qty: number; price: number }[],
+    allReturns: { storeId: any; created_at: any; qty: number; price: number }[],
+    allCash: { storeId: any; created_at: any; amount: number }[],
+    month: string,
+    storeId: string | number
+) {
+    const sid = String(storeId);
+
+    const salesUpTo = allSales
+        .filter((x) => String(x.storeId) === sid && ymOf(x.created_at) <= month)
+        .reduce((a, s) => a + (s.qty || 0) * (s.price || 0), 0);
+
+    const returnsUpTo = allReturns
+        .filter((x) => String(x.storeId) === sid && ymOf(x.created_at) <= month)
+        .reduce((a, r) => a + (r.qty || 0) * (r.price || 0), 0);
+
+    const cashUpTo = allCash
+        .filter((x) => String(x.storeId) === sid && ymOf(x.created_at) <= month)
+        .reduce((a, r) => a + (r.amount || 0), 0);
+
+    return Math.max(salesUpTo - returnsUpTo - cashUpTo, 0);
+}
 
 export default function SummaryScreen() {
     const router = useRouter();
 
-    // Global stores
     const stores = useAppStore((s) => s.stores);
+    const salesAll = useAppStore((s) => s.sales) as any[];
+    const returnsAll = useAppStore((s) => s.returns) as any[];
+    const cashAll = useAppStore((s) => s.cashReceipts) as any[];
+    const pullNow = useAppStore((s) => s.pullNow);
+
     const { items: expenses, fetchAll: fetchExpenses } = useExpensesStore();
 
-    // Oy tanlov
+    const online = useSyncStore((s) => s.online);
+
     const monthOpts = useMemo(() => monthOptions(24), []);
     const [month, setMonth] = useState<string>(monthOpts[0]?.value!);
 
-    // Serverdan MSS
-    const [mss, setMss] = useState<MSSRow[]>([]);
-    const [loadingServer, setLoadingServer] = useState(false);
-
-    // Realtime channel refs
-    const chExpensesRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
-    const chMssRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
-
-    // MSS fetcher
-    const fetchMssForMonth = useCallback(async (ym: string) => {
-        setLoadingServer(true);
-        try {
-            let { data, error } = await supabase
-                .from("monthly_store_summary")
-                .select("*")
-                .eq("ym", ym);
-
-            if (!error && (data?.length ?? 0) === 0) {
-                await supabase.rpc("recompute_monthly_summary", { _ym: ym });
-                const second = await supabase
-                    .from("monthly_store_summary")
-                    .select("*")
-                    .eq("ym", ym);
-                data = second.data ?? [];
-            }
-            setMss((data ?? []) as MSSRow[]);
-        } finally {
-            setLoadingServer(false);
-        }
-    }, []);
-
-    // Boshlang'ich yuklash + oy o'zgarsa
+    // expenses local load
     useEffect(() => {
-        fetchMssForMonth(month);
         fetchExpenses();
-    }, [month, fetchMssForMonth, fetchExpenses]);
+    }, [fetchExpenses]);
 
-    // Realtime: EXPENSES → local expenses yangilash (oy bo‘yicha)
+    // online polling: summary yangilanishi uchun
+    const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
     useEffect(() => {
-        if (chExpensesRef.current) {
-            try { supabase.removeChannel(chExpensesRef.current as any); } catch { }
-            chExpensesRef.current = null;
+        if (online) {
+            pullNow().catch(() => { });
+            if (!pollRef.current) {
+                pollRef.current = setInterval(() => {
+                    useAppStore.getState().pullNow().catch(() => { });
+                }, 15000);
+            }
+        } else {
+            if (pollRef.current) {
+                clearInterval(pollRef.current);
+                pollRef.current = null;
+            }
         }
-
-        const ch = supabase
-            .channel(`expenses-realtime-summary-${month}`)
-            .on(
-                "postgres_changes",
-                { event: "*", schema: "public", table: "expenses" },
-                (payload) => {
-                    const newYm = toYm((payload.new as any)?.created_at);
-                    const oldYm = toYm((payload.old as any)?.created_at);
-                    if (!newYm && !oldYm) { fetchExpenses(); return; }
-                    if (newYm === month || oldYm === month) { fetchExpenses(); }
-                }
-            )
-            .subscribe();
-
-        chExpensesRef.current = ch;
         return () => {
-            if (chExpensesRef.current) {
-                try { supabase.removeChannel(chExpensesRef.current as any); } catch { }
-                chExpensesRef.current = null;
+            if (pollRef.current) {
+                clearInterval(pollRef.current);
+                pollRef.current = null;
             }
         };
-    }, [month, fetchExpenses]);
+    }, [online, pullNow]);
 
-    // Realtime: MONTHLY_STORE_SUMMARY → jadvalni qayta yuklash
-    useEffect(() => {
-        if (chMssRef.current) {
-            try { supabase.removeChannel(chMssRef.current as any); } catch { }
-            chMssRef.current = null;
-        }
-
-        const ch = supabase
-            .channel(`mss-realtime-${month}`)
-            .on(
-                "postgres_changes",
-                { event: "*", schema: "public", table: "monthly_store_summary", filter: `ym=eq.${month}` },
-                () => fetchMssForMonth(month)
-            )
-            .subscribe();
-
-        chMssRef.current = ch;
-        return () => {
-            if (chMssRef.current) {
-                try { supabase.removeChannel(chMssRef.current as any); } catch { }
-                chMssRef.current = null;
-            }
-        };
-    }, [month, fetchMssForMonth]);
-
-    // rows (server)
+    // Per-store rows (local hisob)
     type Row = {
         storeId: string;
         storeName: string;
@@ -159,45 +115,63 @@ export default function SummaryScreen() {
 
     const rows: Row[] = useMemo(() => {
         const nameById = new Map(stores.map((s) => [String(s.id), s.name]));
-        return (mss || [])
-            .map((r) => ({
-                storeId: r.store_id,
-                storeName: nameById.get(String(r.store_id)) ?? "—",
-                totalSales: Number(r.total_sales || 0),
-                totalReturns: Number(r.total_returns || 0),
-                totalCash: Number(r.total_cash || 0),
-                debt: Number(r.debt || 0),
-            }))
-            .sort((a, b) => a.storeName.localeCompare(b.storeName));
-    }, [mss, stores]);
 
-    // --- Faqat do‘kon (shop) xarajatlari — oy bo‘yicha
+        const storeIds = stores.map((s) => String(s.id));
+
+        return storeIds
+            .map((sid) => {
+                const sales = salesAll
+                    .filter((x) => String(x.storeId) === sid && inMonth(x.created_at, month))
+                    .reduce((a, s) => a + Number(s.qty || 0) * Number(s.price || 0), 0);
+
+                const ret = returnsAll
+                    .filter((x) => String(x.storeId) === sid && inMonth(x.created_at, month))
+                    .reduce((a, r) => a + Number(r.qty || 0) * Number(r.price || 0), 0);
+
+                const cash = cashAll
+                    .filter((x) => String(x.storeId) === sid && inMonth(x.created_at, month))
+                    .reduce((a, c) => a + Number(c.amount || 0), 0);
+
+                const debt = computeDebtWithCarry(salesAll, returnsAll, cashAll, month, sid);
+
+                return {
+                    storeId: sid,
+                    storeName: nameById.get(sid) ?? "—",
+                    totalSales: sales,
+                    totalReturns: ret,
+                    totalCash: cash,
+                    debt,
+                };
+            })
+            .sort((a, b) => a.storeName.localeCompare(b.storeName));
+    }, [stores, salesAll, returnsAll, cashAll, month]);
+
+    // --- do‘kon (shop) xarajatlari
     const sumExpensesMonth = useMemo(() => {
         let s = 0;
         for (const e of expenses) {
-            if (!inMonth(e.created_at, month)) continue;
+            if (!inMonth((e as any).created_at, month)) continue;
             const kind = String((e as any).kind ?? "").toLowerCase();
             if (kind !== "shop") continue;
-            const amount = Number((e as any).amount ?? (Number(e.qty ?? 0) * Number(e.price ?? 0))) || 0;
+            const amount = Number((e as any).amount ?? (Number((e as any).qty ?? 0) * Number((e as any).price ?? 0))) || 0;
             s += amount;
         }
         return s;
     }, [expenses, month]);
 
-    // --- Bank + Oilaviy xarajatlar — oy bo‘yicha
+    // --- bank + oilaviy
     const sumOtherExpensesMonth = useMemo(() => {
         let s = 0;
         for (const e of expenses) {
-            if (!inMonth(e.created_at, month)) continue;
+            if (!inMonth((e as any).created_at, month)) continue;
             const kind = String((e as any).kind ?? "").toLowerCase();
             if (kind !== "bank" && kind !== "family") continue;
-            const amount = Number((e as any).amount ?? (Number(e.qty ?? 0) * Number(e.price ?? 0))) || 0;
+            const amount = Number((e as any).amount ?? (Number((e as any).qty ?? 0) * Number((e as any).price ?? 0))) || 0;
             s += amount;
         }
         return s;
     }, [expenses, month]);
 
-    // Totals + net profit
     const totals = useMemo(() => {
         const t = { sales: 0, returns: 0, cash: 0, debt: 0 };
         for (const r of rows) {
@@ -209,20 +183,15 @@ export default function SummaryScreen() {
         const netProfit = t.sales - t.returns - sumExpensesMonth;
         return {
             ...t,
-            expenses: sumExpensesMonth,           // do‘kon xarajatlari
-            otherExpenses: sumOtherExpensesMonth, // bank + oilaviy
+            expenses: sumExpensesMonth,
+            otherExpenses: sumOtherExpensesMonth,
             netProfit,
         };
     }, [rows, sumExpensesMonth, sumOtherExpensesMonth]);
 
-    const netProfitColor =
-        totals.netProfit > 0 ? "#10B981" : totals.netProfit < 0 ? "#EF4444" : C.text;
+    const netProfitColor = totals.netProfit > 0 ? "#10B981" : totals.netProfit < 0 ? "#EF4444" : C.text;
 
-    // qolgan pul = sof foyda − (bank+oilaviy)
-    const remaining = useMemo(
-        () => totals.netProfit - (totals.otherExpenses || 0),
-        [totals.netProfit, totals.otherExpenses]
-    );
+    const remaining = useMemo(() => totals.netProfit - (totals.otherExpenses || 0), [totals.netProfit, totals.otherExpenses]);
     const remainingBg = remaining > 0 ? "#10B981" : remaining < 0 ? "#EF4444" : "#6B7280";
     const remainingText = "#FFFFFF";
 
@@ -256,11 +225,9 @@ export default function SummaryScreen() {
                 source: "summary",
                 fileName: `Umumiy_${month}.pdf`,
             });
+
             setPdfName(res.name);
             setPdfUri(res.uri);
-
-            // ⛔️ ENDILIKDA AUTO-OPEN YO'Q
-            // Faqat tugmalar orqali ochiladi (Ochish -> report-viewer)
         } finally {
             setCreatingPdf(false);
         }
@@ -269,17 +236,17 @@ export default function SummaryScreen() {
     const onShare = async () => {
         if (!pdfUri) return;
         try {
-            await Sharing.shareAsync(pdfUri, {
-                mimeType: "application/pdf",
-                dialogTitle: pdfName || "Hisobot",
-            });
+            await Sharing.shareAsync(pdfUri, { mimeType: "application/pdf", dialogTitle: pdfName || "Hisobot" });
         } catch { }
     };
+
     const onOpenExternal = async () => {
         if (!pdfUri) return;
-        try { await Linking.openURL(pdfUri); } catch { }
+        try {
+            await Linking.openURL(pdfUri);
+        } catch { }
     };
-    // “Ochish” tugmasi bosilganda viewer’ga olib boramiz (o'zgarmaydi):
+
     const openFullScreen = () => {
         if (!pdfUri) return;
         router.push({
@@ -288,13 +255,12 @@ export default function SummaryScreen() {
         });
     };
 
-    // YUKLAB OLISH (shu sahifaning ichida)
+    // download
     const hasSAF =
         Platform.OS === "android" &&
         // @ts-ignore
         !!FileSystem.StorageAccessFramework &&
-        typeof (FileSystem as any).StorageAccessFramework
-            .requestDirectoryPermissionsAsync === "function";
+        typeof (FileSystem as any).StorageAccessFramework.requestDirectoryPermissionsAsync === "function";
 
     const onDownload = async () => {
         if (!pdfUri) return;
@@ -302,7 +268,10 @@ export default function SummaryScreen() {
             if (hasSAF) {
                 const saf = (FileSystem as any).StorageAccessFramework;
                 const perm = await saf.requestDirectoryPermissionsAsync();
-                if (!perm.granted) { alert("Ruxsat berilmadi."); return; }
+                if (!perm.granted) {
+                    alert("Ruxsat berilmadi.");
+                    return;
+                }
                 const name = (pdfName || "Hisobot").toString().replace(/\.pdf$/i, "");
                 const outUri = await saf.createFileAsync(perm.directoryUri, name, "application/pdf");
                 const b64 = await FileSystemLegacy.readAsStringAsync(pdfUri, {
@@ -311,7 +280,6 @@ export default function SummaryScreen() {
                 await FileSystem.writeAsStringAsync(outUri, b64, { encoding: "base64" as any });
                 alert("Fayl yuklab olindi.");
             } else {
-                // iOS yoki SAF yo‘q → ulashish oynasi
                 await Sharing.shareAsync(pdfUri, { mimeType: "application/pdf", dialogTitle: pdfName || "Hisobot" });
             }
         } catch (e) {
@@ -325,13 +293,8 @@ export default function SummaryScreen() {
     return (
         <ScrollView contentContainerStyle={{ padding: 16 }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-                <H1 style={{ flex: 1 }}>Umumiy Hisobot{loadingServer ? " …" : ""}</H1>
-                <Button
-                    title={creatingPdf ? "PDF tayyorlanmoqda…" : "PDF yaratish"}
-                    onPress={createPdf}
-                    disabled={creatingPdf}
-                    style={{ minWidth: 160 }}
-                />
+                <H1 style={{ flex: 1 }}>Umumiy Hisobot</H1>
+                <Button title={creatingPdf ? "PDF tayyorlanmoqda…" : "PDF yaratish"} onPress={createPdf} disabled={creatingPdf} style={{ minWidth: 160 }} />
             </View>
 
             <H2 style={{ marginTop: 12 }}>Oy tanlang</H2>
@@ -340,14 +303,7 @@ export default function SummaryScreen() {
             <Card style={{ marginTop: 12, padding: 0 }}>
                 <ScrollView horizontal showsHorizontalScrollIndicator contentContainerStyle={{ minWidth: 760 }}>
                     <View style={{ width: "100%" }}>
-                        <View
-                            style={{
-                                flexDirection: "row",
-                                backgroundColor: "#F9FAFB",
-                                borderBottomWidth: 1,
-                                borderColor: C.border,
-                            }}
-                        >
+                        <View style={{ flexDirection: "row", backgroundColor: "#F9FAFB", borderBottomWidth: 1, borderColor: C.border }}>
                             <Cell label="Do'kon" bold flex />
                             <Cell label="Sotuv" bold right width={140} />
                             <Cell label="Qaytarish" bold right width={140} />
@@ -371,14 +327,7 @@ export default function SummaryScreen() {
                             ))
                         )}
 
-                        <View
-                            style={{
-                                flexDirection: "row",
-                                borderTopWidth: 2,
-                                borderColor: "#EAB308",
-                                backgroundColor: "#FEF3C7",
-                            }}
-                        >
+                        <View style={{ flexDirection: "row", borderTopWidth: 2, borderColor: "#EAB308", backgroundColor: "#FEF3C7" }}>
                             <Cell label="Jami" bold flex />
                             <Cell label={fmt(totals.sales)} right bold width={140} />
                             <Cell label={fmt(totals.returns)} right bold width={140} />
@@ -389,7 +338,6 @@ export default function SummaryScreen() {
                 </ScrollView>
             </Card>
 
-            {/* Yuqoridagi ikkita karta */}
             <View style={{ flexDirection: "row", gap: 12, marginTop: 12 }}>
                 <Card style={{ flex: 1 }}>
                     <Text style={{ color: C.muted, fontWeight: "800" }}>Umumiy xarajat (faqat do‘kon)</Text>
@@ -403,17 +351,14 @@ export default function SummaryScreen() {
                 </Card>
             </View>
 
-            {/* Qo‘shimcha ikki karta */}
             <View style={{ flexDirection: "row", gap: 12, marginTop: 12 }}>
                 <Card style={{ flex: 1 }}>
                     <Text style={{ color: C.muted, fontWeight: "800" }}>Qolgan xarajatlar (bank + oilaviy)</Text>
-                    <Text style={{ fontSize: 18, fontWeight: "900", marginTop: 6 }}>
-                        {fmt(totals.otherExpenses || 0)} so‘m
-                    </Text>
+                    <Text style={{ fontSize: 18, fontWeight: "900", marginTop: 6 }}>{fmt(totals.otherExpenses || 0)} so‘m</Text>
                 </Card>
 
                 <Card style={{ flex: 1, backgroundColor: remainingBg, borderColor: "transparent" }}>
-                    <Text style={{ color: remainingText, fontWeight: "800" }}>Qolgan pul</Text>
+                    <Text style={{ color: "#fff", fontWeight: "800" }}>Qolgan pul</Text>
                     <Text style={{ fontSize: 18, fontWeight: "900", marginTop: 6, color: remainingText }}>
                         {fmt(remaining)} so‘m
                     </Text>
@@ -435,12 +380,7 @@ export default function SummaryScreen() {
                     </View>
 
                     <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
-                        <Button
-                            title="Bekor qilish"
-                            onPress={() => { setPdfUri(null); }}
-                            tone="neutral"
-                            style={{ flex: 1 }}
-                        />
+                        <Button title="Bekor qilish" onPress={() => setPdfUri(null)} tone="neutral" style={{ flex: 1 }} />
                         <Button title="Yuklab olish" onPress={onDownload} style={{ flex: 1 }} />
                     </View>
                 </Card>
@@ -450,8 +390,18 @@ export default function SummaryScreen() {
 }
 
 function Cell({
-    label, bold, right, width, flex,
-}: { label: string; bold?: boolean; right?: boolean; width?: number; flex?: boolean; }) {
+    label,
+    bold,
+    right,
+    width,
+    flex,
+}: {
+    label: string;
+    bold?: boolean;
+    right?: boolean;
+    width?: number;
+    flex?: boolean;
+}) {
     return (
         <View
             style={{
@@ -463,13 +413,7 @@ function Cell({
                 borderColor: C.border,
             }}
         >
-            <Text
-                style={{
-                    fontWeight: bold ? "800" : "400",
-                    textAlign: right ? "right" : "left",
-                    color: C.text,
-                }}
-            >
+            <Text style={{ fontWeight: bold ? "800" : "400", textAlign: right ? "right" : "left", color: C.text }}>
                 {label}
             </Text>
         </View>

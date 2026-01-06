@@ -1,358 +1,196 @@
-// store/expensesStore.ts
-import { api } from "@/lib/api";
+// store/expensesStore.ts  (NO SUPABASE)
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import NetInfo from "@react-native-community/netinfo";
 import { create } from "zustand";
 
-/** --- TYPES --- */
 export type ExpenseKind = "family" | "shop" | "bank";
 
-export interface Expense {
+export type RowInput = {
+    title: string;
+    qty: number;
+    price: number;
+};
+
+export type ExpenseItem = {
     id: string;
     batch_id: string;
     kind: ExpenseKind;
     title: string;
-    qty: number | null;
-    price: number | null;
+    qty: number;
+    price: number;
     amount: number;
-    note?: string | null;
-    created_at: string;
-    client_id?: string | null;
-}
+    created_at: string; // ISO
+};
 
-export type RowInput = { title: string; qty: number; price: number; note?: string };
-
-export interface ExpenseBatch {
-    id: string;
+export type ExpenseBatch = {
+    id: string; // batch_id
     kind: ExpenseKind;
     created_at: string;
+    items: ExpenseItem[];
     total: number;
-    items: Expense[];
-}
+};
 
-type RowQueued = RowInput & { client_id?: string; created_at?: string };
+type BatchSummary = { created_at: string; total: number };
+type Totals = { family: number; shop: number; bank: number; total: number };
 
-type Totals = { family: number; shop: number; bank: number; all: number; total?: number };
-
-type QueueItem =
-    | { op: "add"; kind: ExpenseKind; rows: RowQueued[]; batch_id: string }
-    | { op: "edit"; kind: ExpenseKind; rows: RowQueued[]; batch_id: string }
-    | { op: "delete"; batch_id: string };
-
-interface ExpensesState {
+type State = {
     loading: boolean;
-    syncing: boolean;
-    online: boolean;
 
-    items: Expense[];
-    batchesByKind: Record<ExpenseKind, ExpenseBatch[]>;
+    items: ExpenseItem[];
     totals: Totals;
+    batchesByKind: Record<ExpenseKind, BatchSummary[]>;
 
     fetchAll: () => Promise<void>;
-    addBatch: (kind: ExpenseKind, rows: RowInput[]) => Promise<string | null>;
-    editBatch: (batch_id: string, kind: ExpenseKind, rows: RowInput[]) => Promise<void>;
-    deleteBatch: (batch_id: string) => Promise<void>;
-    listBatches: (k: ExpenseKind) => ExpenseBatch[];
+    listBatches: (kind: ExpenseKind) => ExpenseBatch[];
 
-    _ensureNetListener: () => void;
-    _flushQueue: () => Promise<void>;
+    addBatch: (kind: ExpenseKind, rows: RowInput[]) => Promise<void>;
+    editBatch: (batchId: string, kind: ExpenseKind, rows: RowInput[]) => Promise<void>;
+    deleteBatch: (batchId: string) => Promise<void>;
+};
+
+const LS_ITEMS = "expenses:items:v1";
+
+function uuidv4() {
+    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+        const r = (Math.random() * 16) | 0;
+        const v = c === "x" ? r : (r & 0x3) | 0x8;
+        return v.toString(16);
+    });
+}
+const nowIso = () => new Date().toISOString();
+
+function buildItemsFromRows(batchId: string, kind: ExpenseKind, createdAt: string, rows: RowInput[]): ExpenseItem[] {
+    return rows.map((r) => {
+        const qty = Number(r.qty || 0);
+        const price = Number(r.price || 0);
+        const amount = qty * price;
+        return {
+            id: uuidv4(),
+            batch_id: batchId,
+            kind,
+            title: String(r.title || "").trim(),
+            qty,
+            price,
+            amount,
+            created_at: createdAt,
+        };
+    });
 }
 
-/** --- INTERNAL --- */
-const QKEY = "expenses_queue_v2";
-let NET_LISTENER_SET = false;
+function calcDerived(items: ExpenseItem[]) {
+    let family = 0, shop = 0, bank = 0;
 
-function uuidLike() {
-    const rnd = (len: number) => Array.from({ length: len }, () => Math.floor(Math.random() * 16).toString(16)).join("");
-    return `${rnd(8)}-${rnd(4)}-${rnd(4)}-${rnd(4)}-${rnd(12)}`;
-}
+    const map: Record<ExpenseKind, Map<string, number>> = {
+        family: new Map(),
+        shop: new Map(),
+        bank: new Map(),
+    };
 
-function fixNum(n: any): number {
-    const v = Number(n);
-    return Number.isFinite(v) ? v : 0;
-}
-
-async function pushOp(op: QueueItem) {
-    const raw = (await AsyncStorage.getItem(QKEY)) ?? "[]";
-    const arr = JSON.parse(raw) as QueueItem[];
-    arr.push(op);
-    await AsyncStorage.setItem(QKEY, JSON.stringify(arr));
-}
-
-async function readQueue(): Promise<QueueItem[]> {
-    const raw = (await AsyncStorage.getItem(QKEY)) ?? "[]";
-    try { return JSON.parse(raw) as QueueItem[]; } catch { return []; }
-}
-
-async function writeQueue(arr: QueueItem[]) {
-    await AsyncStorage.setItem(QKEY, JSON.stringify(arr));
-}
-
-function groupBatches(items: Expense[]): Record<ExpenseKind, ExpenseBatch[]> {
-    const map = new Map<string, ExpenseBatch>();
     for (const it of items) {
-        if (!map.has(it.batch_id)) {
-            map.set(it.batch_id, {
-                id: it.batch_id,
-                kind: it.kind,
-                created_at: it.created_at,
-                total: 0,
-                items: [],
-            });
-        }
-        const b = map.get(it.batch_id)!;
-        b.items.push(it);
+        const a = Number(it.amount || 0);
+        if (it.kind === "family") family += a;
+        if (it.kind === "shop") shop += a;
+        if (it.kind === "bank") bank += a;
 
-        const a = fixNum(it.amount ?? fixNum(it.qty) * fixNum(it.price));
-        b.total += a;
-
-        if (+new Date(it.created_at) < +new Date(b.created_at)) b.created_at = it.created_at;
+        const key = String(it.created_at || "");
+        map[it.kind].set(key, (map[it.kind].get(key) || 0) + a);
     }
 
-    const byKind: Record<ExpenseKind, ExpenseBatch[]> = { family: [], shop: [], bank: [] };
-    for (const b of map.values()) byKind[b.kind].push(b);
+    const mkSummaries = (m: Map<string, number>): BatchSummary[] =>
+        [...m.entries()]
+            .map(([created_at, total]) => ({ created_at, total }))
+            .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
 
-    (Object.keys(byKind) as ExpenseKind[]).forEach((k) =>
-        byKind[k].sort((a, b) => +new Date(b.created_at) - +new Date(a.created_at))
-    );
-    return byKind;
-}
-
-function recompute(items: Expense[]) {
-    const batchesByKind = groupBatches(items);
-    const totals: Totals = {
-        family: batchesByKind.family.reduce((s, b) => s + b.total, 0),
-        shop: batchesByKind.shop.reduce((s, b) => s + b.total, 0),
-        bank: batchesByKind.bank.reduce((s, b) => s + b.total, 0),
-        all: items.reduce((s, x) => s + fixNum(x.amount ?? fixNum(x.qty) * fixNum(x.price)), 0),
+    const batchesByKind = {
+        family: mkSummaries(map.family),
+        shop: mkSummaries(map.shop),
+        bank: mkSummaries(map.bank),
     };
-    totals.total = totals.family + totals.shop + totals.bank;
-    return { items, batchesByKind, totals };
+
+    const totals: Totals = { family, shop, bank, total: family + shop + bank };
+    return { totals, batchesByKind };
 }
 
-export const useExpensesStore = create<ExpensesState>((set, get) => ({
+async function loadLocalItems(): Promise<ExpenseItem[]> {
+    try {
+        const raw = await AsyncStorage.getItem(LS_ITEMS);
+        if (!raw) return [];
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) return [];
+        return parsed as ExpenseItem[];
+    } catch {
+        return [];
+    }
+}
+
+async function saveLocalItems(items: ExpenseItem[]) {
+    try {
+        await AsyncStorage.setItem(LS_ITEMS, JSON.stringify(items));
+    } catch { }
+}
+
+export const useExpensesStore = create<State>((set, get) => ({
     loading: false,
-    syncing: false,
-    online: true,
-
     items: [],
+    totals: { family: 0, shop: 0, bank: 0, total: 0 },
     batchesByKind: { family: [], shop: [], bank: [] },
-    totals: { family: 0, shop: 0, bank: 0, all: 0, total: 0 },
-
-    _ensureNetListener: () => {
-        if (NET_LISTENER_SET) return;
-        NET_LISTENER_SET = true;
-
-        NetInfo.addEventListener(async (state) => {
-            const online = !!state.isConnected && state.isInternetReachable !== false;
-            set({ online });
-            if (online) {
-                try { await get()._flushQueue(); } catch { }
-                try { await get().fetchAll(); } catch { }
-            }
-        });
-    },
-
-    _flushQueue: async () => {
-        const arr = await readQueue();
-        if (!arr.length) return;
-
-        set({ syncing: true });
-        const rest: QueueItem[] = [];
-
-        try {
-            for (const q of arr) {
-                try {
-                    if (q.op === "delete") {
-                        await api.expenses.deleteBatch(q.batch_id);
-                        continue;
-                    }
-
-                    // add/edit -> backend replace batch
-                    const kind = q.kind;
-                    const rowsFixed = q.rows.map((r) => ({
-                        client_id: r.client_id ?? uuidLike(),
-                        title: (r.title || "").trim(),
-                        qty: r.qty == null ? null : fixNum(r.qty),
-                        price: r.price == null ? null : fixNum(r.price),
-                        amount: fixNum(r.qty) * fixNum(r.price),
-                        note: r.note ?? null,
-                        created_at: r.created_at ?? new Date().toISOString(),
-                    }));
-
-                    await api.expenses.replaceBatch(q.batch_id, {
-                        kind,
-                        rows: rowsFixed,
-                    });
-
-                } catch {
-                    rest.push(q);
-                }
-            }
-        } finally {
-            await writeQueue(rest);
-            set({ syncing: false });
-        }
-    },
 
     fetchAll: async () => {
-        get()._ensureNetListener();
-
-        if (!get().online) {
-            set({ loading: false });
-            return;
-        }
-
         set({ loading: true });
         try {
-            const r = await api.expenses.list();
-            const data = (r.data || []) as any[];
-
-            const items: Expense[] = data.map((x) => ({
-                id: x.id,
-                batch_id: x.batch_id,
-                kind: x.kind,
-                title: x.title,
-                qty: x.qty == null ? null : Number(x.qty),
-                price: x.price == null ? null : Number(x.price),
-                amount: Number(x.amount || 0),
-                note: x.note ?? null,
-                created_at: x.created_at,
-                client_id: x.client_id ?? null,
-            }));
-
-            set({ ...recompute(items), loading: false });
-        } catch {
+            const items = await loadLocalItems();
+            const { totals, batchesByKind } = calcDerived(items);
+            set({ items, totals, batchesByKind });
+        } finally {
             set({ loading: false });
         }
+    },
+
+    listBatches: (kind) => {
+        const items = get().items.filter((i) => i.kind === kind);
+
+        const map = new Map<string, ExpenseItem[]>();
+        for (const it of items) {
+            const bid = String(it.batch_id);
+            if (!map.has(bid)) map.set(bid, []);
+            map.get(bid)!.push(it);
+        }
+
+        const out: ExpenseBatch[] = [];
+        for (const [batch_id, xs] of map.entries()) {
+            const created_at = xs[0]?.created_at ?? nowIso();
+            const total = xs.reduce((s, x) => s + (Number(x.amount) || 0), 0);
+            out.push({ id: batch_id, kind, created_at, items: xs, total });
+        }
+
+        return out.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
     },
 
     addBatch: async (kind, rows) => {
-        const batch_id = uuidLike();
-        if (!rows.length) return null;
+        const batchId = uuidv4();
+        const createdAt = nowIso();
+        const itemsNew = buildItemsFromRows(batchId, kind, createdAt, rows);
 
-        const ts = new Date().toISOString();
-        const queuedRows: RowQueued[] = rows.map((r) => ({
-            title: r.title.trim(),
-            qty: fixNum(r.qty),
-            price: fixNum(r.price),
-            note: r.note,
-            client_id: uuidLike(),
-            created_at: ts,
-        }));
-
-        // optimistic local
-        const newItems: Expense[] = [
-            ...get().items,
-            ...queuedRows.map((r) => ({
-                id: uuidLike(),
-                client_id: r.client_id!,
-                batch_id,
-                kind,
-                title: r.title,
-                qty: r.qty,
-                price: r.price,
-                amount: r.qty! * r.price!,
-                note: r.note ?? null,
-                created_at: r.created_at!,
-            })),
-        ];
-        set(recompute(newItems));
-
-        if (!get().online) {
-            await pushOp({ op: "add", kind, rows: queuedRows, batch_id });
-            return batch_id;
-        }
-
-        try {
-            await api.expenses.replaceBatch(batch_id, {
-                kind,
-                rows: queuedRows.map((r) => ({
-                    client_id: r.client_id!,
-                    title: r.title,
-                    qty: fixNum(r.qty),
-                    price: fixNum(r.price),
-                    amount: fixNum(r.qty) * fixNum(r.price),
-                    note: r.note ?? null,
-                    created_at: r.created_at!,
-                })),
-            });
-            await get().fetchAll();
-        } catch {
-            await pushOp({ op: "add", kind, rows: queuedRows, batch_id });
-        }
-
-        return batch_id;
+        const next = [...get().items, ...itemsNew];
+        await saveLocalItems(next);
+        const derived = calcDerived(next);
+        set({ items: next, ...derived });
     },
 
-    editBatch: async (batch_id, kind, rows) => {
-        const ts = new Date().toISOString();
-        const queuedRows: RowQueued[] = rows.map((r) => ({
-            title: r.title.trim(),
-            qty: fixNum(r.qty),
-            price: fixNum(r.price),
-            note: r.note,
-            client_id: uuidLike(),
-            created_at: ts,
-        }));
+    editBatch: async (batchId, kind, rows) => {
+        const kept = get().items.filter((i) => String(i.batch_id) !== String(batchId));
+        const createdAt = nowIso(); // xohlasangiz eski created_at ni saqlash ham mumkin
+        const itemsNew = buildItemsFromRows(batchId, kind, createdAt, rows);
 
-        // optimistic local
-        const filtered = get().items.filter((x) => x.batch_id !== batch_id);
-        const added = queuedRows.map<Expense>((r) => ({
-            id: uuidLike(),
-            client_id: r.client_id!,
-            batch_id,
-            kind,
-            title: r.title,
-            qty: r.qty,
-            price: r.price,
-            amount: r.qty! * r.price!,
-            note: r.note ?? null,
-            created_at: r.created_at!,
-        }));
-        set(recompute([...filtered, ...added]));
-
-        if (!get().online) {
-            await pushOp({ op: "edit", kind, rows: queuedRows, batch_id });
-            return;
-        }
-
-        try {
-            await api.expenses.replaceBatch(batch_id, {
-                kind,
-                rows: queuedRows.map((r) => ({
-                    client_id: r.client_id!,
-                    title: r.title,
-                    qty: fixNum(r.qty),
-                    price: fixNum(r.price),
-                    amount: fixNum(r.qty) * fixNum(r.price),
-                    note: r.note ?? null,
-                    created_at: r.created_at!,
-                })),
-            });
-            await get().fetchAll();
-        } catch {
-            await pushOp({ op: "edit", kind, rows: queuedRows, batch_id });
-        }
+        const next = [...kept, ...itemsNew];
+        await saveLocalItems(next);
+        const derived = calcDerived(next);
+        set({ items: next, ...derived });
     },
 
-    deleteBatch: async (batch_id) => {
-        // optimistic local
-        const filtered = get().items.filter((x) => x.batch_id !== batch_id);
-        set(recompute(filtered));
-
-        if (!get().online) {
-            await pushOp({ op: "delete", batch_id });
-            return;
-        }
-
-        try {
-            await api.expenses.deleteBatch(batch_id);
-            await get().fetchAll();
-        } catch {
-            await pushOp({ op: "delete", batch_id });
-        }
+    deleteBatch: async (batchId) => {
+        const next = get().items.filter((i) => String(i.batch_id) !== String(batchId));
+        await saveLocalItems(next);
+        const derived = calcDerived(next);
+        set({ items: next, ...derived });
     },
-
-    listBatches: (k) => get().batchesByKind[k],
 }));

@@ -22,56 +22,47 @@ function monthOptions(lastN = 24) {
     }
     return arr;
 }
+
 const toYM = (ts: string | number | Date) => {
     const d = new Date(ts);
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 };
 
 export default function ReportScreen() {
-    const { fetchAll, loading, totals, items, batchesByKind } = useExpensesStore();
+    const { fetchAll, loading, totals, batchesByKind } = useExpensesStore();
     const online = useSyncStore((s) => s.online);
     const [exporting, setExporting] = useState(false);
 
-    // Oy tanlash
     const monthOpts = useMemo(() => monthOptions(24), []);
     const [month, setMonth] = useState<string>(monthOpts[0]?.value);
 
+    // ✅ Har doim local’dan ko‘rsatish uchun: focus bo‘lganda fetchAll()
     useFocusEffect(
         useCallback(() => {
-            if (online) fetchAll().catch(() => { });
-        }, [online, fetchAll])
+            fetchAll().catch(() => { });
+        }, [fetchAll])
     );
 
-    // Tanlangan oy bo‘yicha jami (family/shop/bank)
     const monthTotals = useMemo(() => {
-        const inMonth = (ts: string) => toYM(ts) === month;
+        const inMonth = (ts: string | number | Date) => toYM(ts) === month;
 
-        const sum = (xs: number[]) =>
-            xs.reduce((a, b) => a + (Number.isFinite(b) ? b : 0), 0);
+        const sum = (xs: number[]) => xs.reduce((a, b) => a + (Number.isFinite(b) ? b : 0), 0);
 
         const family = sum(
-            (batchesByKind.family || [])
-                .filter((b) => inMonth(b.created_at))
-                .map((b) => b.total)
+            (batchesByKind.family || []).filter((b) => inMonth(b.created_at)).map((b) => b.total)
         );
         const shop = sum(
-            (batchesByKind.shop || [])
-                .filter((b) => inMonth(b.created_at))
-                .map((b) => b.total)
+            (batchesByKind.shop || []).filter((b) => inMonth(b.created_at)).map((b) => b.total)
         );
         const bank = sum(
-            (batchesByKind.bank || [])
-                .filter((b) => inMonth(b.created_at))
-                .map((b) => b.total)
+            (batchesByKind.bank || []).filter((b) => inMonth(b.created_at)).map((b) => b.total)
         );
 
         return { family, shop, bank, total: family + shop + bank };
     }, [batchesByKind, month]);
 
-    // Ehtiyot uchun (component ichida ishlatiladigan ko‘rinish)
     const safeTotals = useMemo(() => {
-        const tObj: Partial<{ family: number; shop: number; bank: number; total: number }> =
-            monthTotals ?? totals ?? {};
+        const tObj: Partial<{ family: number; shop: number; bank: number; total: number }> = monthTotals ?? totals ?? {};
         const f = Number(tObj.family ?? 0);
         const s = Number(tObj.shop ?? 0);
         const b = Number(tObj.bank ?? 0);
@@ -84,6 +75,7 @@ export default function ReportScreen() {
     const onGoBank = () => router.replace("/(main)/expenses/bank");
 
     const fmt = (n: number) => Number(n || 0).toLocaleString("ru-RU");
+
     const buildHtml = () => {
         const dt = new Date().toLocaleString();
         return `
@@ -136,16 +128,9 @@ h1{margin:0 0 8px;font-size:22px}
             refreshControl={<RefreshControl refreshing={loading} onRefresh={onRefresh} />}
             contentContainerStyle={{ paddingBottom: 16 }}
         >
-            <View
-                style={{
-                    paddingHorizontal: 16,
-                    paddingTop: 12,
-                    gap: 10,
-                }}
-            >
+            <View style={{ paddingHorizontal: 16, paddingTop: 12, gap: 10 }}>
                 <H2>Xarajatlar — Hisobot</H2>
 
-                {/* Oy tanlang */}
                 <Select value={month} onChange={setMonth} options={monthOpts} />
 
                 <View style={{ alignItems: "flex-end" }}>
@@ -158,12 +143,7 @@ h1{margin:0 0 8px;font-size:22px}
                 </View>
             </View>
 
-            <ReportCards
-                totals={safeTotals}
-                onGoFamily={onGoFamily}
-                onGoShop={onGoShop}
-                onGoBank={onGoBank}
-            />
+            <ReportCards totals={safeTotals} onGoFamily={onGoFamily} onGoShop={onGoShop} onGoBank={onGoBank} />
 
             {!online && (
                 <View
@@ -177,9 +157,7 @@ h1{margin:0 0 8px;font-size:22px}
                         backgroundColor: "#FEF3C7",
                     }}
                 >
-                    <H2 style={{ fontSize: 14 }}>
-                        Offline rejim — tarmoqqa ulanganingizda yangilanadi
-                    </H2>
+                    <H2 style={{ fontSize: 14 }}>Offline rejim — tarmoqqa ulanganingizda yangilanadi</H2>
                 </View>
             )}
         </ScrollView>

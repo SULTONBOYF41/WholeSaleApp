@@ -1,12 +1,10 @@
 // app/(main)/report.tsx
 import Toast from "@/components/Toast";
 import { exportDashboardPdf } from "@/lib/pdf";
-import { supabase } from "@/lib/supabase";
 import { useAppStore } from "@/store/appStore";
 import { useToastStore } from "@/store/toastStore";
-import type { MonthlySummary } from "@/types";
 import * as Sharing from "expo-sharing";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { Linking, Modal, Pressable, ScrollView, Text, TouchableOpacity, View } from "react-native";
 
 const P = "#770E13";
@@ -29,15 +27,15 @@ function computeDebtWithCarry(
 
     const salesUpTo = allSales
         .filter((x) => String(x.storeId) === sid && ymOf(x.created_at) <= month)
-        .reduce((a, s) => a + s.qty * s.price, 0);
+        .reduce((a, s) => a + (s.qty || 0) * (s.price || 0), 0);
 
     const returnsUpTo = allReturns
         .filter((x) => String(x.storeId) === sid && ymOf(x.created_at) <= month)
-        .reduce((a, r) => a + r.qty * r.price, 0);
+        .reduce((a, r) => a + (r.qty || 0) * (r.price || 0), 0);
 
     const cashUpTo = allCash
         .filter((x) => String(x.storeId) === sid && ymOf(x.created_at) <= month)
-        .reduce((a, r) => a + r.amount, 0);
+        .reduce((a, r) => a + (r.amount || 0), 0);
 
     return Math.max(salesUpTo - returnsUpTo - cashUpTo, 0);
 }
@@ -46,9 +44,9 @@ export default function ReportScreen() {
     // ---- Global stores
     const selectedStoreId = useAppStore((s) => s.currentStoreId);
     const stores = useAppStore((s) => s.stores);
-    const allSales = useAppStore((s) => s.sales);
-    const allReturns = useAppStore((s) => s.returns);
-    const cash = useAppStore((s) => s.cashReceipts);
+    const allSales = useAppStore((s) => s.sales) as any[];
+    const allReturns = useAppStore((s) => s.returns) as any[];
+    const cash = useAppStore((s) => s.cashReceipts) as any[];
 
     const toast = useToastStore();
 
@@ -61,9 +59,6 @@ export default function ReportScreen() {
         const d = new Date();
         return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
     });
-
-    const [msRow, setMsRow] = useState<MonthlySummary | null>(null);
-    const [msLoading, setMsLoading] = useState(false);
 
     // Collapsible rank sections
     const [openSalesRank, setOpenSalesRank] = useState(false);
@@ -92,9 +87,9 @@ export default function ReportScreen() {
         [cash, selectedStoreId, month]
     );
 
-    const localTotalSales = useMemo(() => sales.reduce((a, s) => a + s.price * s.qty, 0), [sales]);
-    const localTotalReturns = useMemo(() => returns.reduce((a, r) => a + r.price * r.qty, 0), [returns]);
-    const localTotalCash = useMemo(() => receipts.reduce((a, r) => a + r.amount, 0), [receipts]);
+    const localTotalSales = useMemo(() => sales.reduce((a, s) => a + (s.price || 0) * (s.qty || 0), 0), [sales]);
+    const localTotalReturns = useMemo(() => returns.reduce((a, r) => a + (r.price || 0) * (r.qty || 0), 0), [returns]);
+    const localTotalCash = useMemo(() => receipts.reduce((a, r) => a + (r.amount || 0), 0), [receipts]);
 
     // Carry-over qarz
     const localDebtCarry = useMemo(() => {
@@ -102,16 +97,17 @@ export default function ReportScreen() {
         return computeDebtWithCarry(allSales, allReturns, cash, month, selectedStoreId);
     }, [allSales, allReturns, cash, month, selectedStoreId]);
 
-    const returnsQty = useMemo(() => returns.reduce((a, r) => a + r.qty, 0), [returns]);
+    const returnsQty = useMemo(() => returns.reduce((a, r) => a + (r.qty || 0), 0), [returns]);
 
     // Sotuv reytingi (miqdor + pul)
     const salesRank = useMemo(() => {
         const map = new Map<string, { qty: number; total: number }>();
         for (const s of sales) {
-            const cur = map.get(s.productName) ?? { qty: 0, total: 0 };
-            cur.qty += s.qty;
-            cur.total += s.qty * s.price;
-            map.set(s.productName, cur);
+            const name = String(s.productName || "—");
+            const cur = map.get(name) ?? { qty: 0, total: 0 };
+            cur.qty += Number(s.qty || 0);
+            cur.total += Number(s.qty || 0) * Number(s.price || 0);
+            map.set(name, cur);
         }
         return Array.from(map.entries())
             .map(([name, v]) => ({ name, qty: v.qty, total: v.total }))
@@ -122,10 +118,11 @@ export default function ReportScreen() {
     const returnRank = useMemo(() => {
         const map = new Map<string, { qty: number; total: number }>();
         for (const r of returns) {
-            const cur = map.get(r.productName) ?? { qty: 0, total: 0 };
-            cur.qty += r.qty;
-            cur.total += r.qty * r.price;
-            map.set(r.productName, cur);
+            const name = String(r.productName || "—");
+            const cur = map.get(name) ?? { qty: 0, total: 0 };
+            cur.qty += Number(r.qty || 0);
+            cur.total += Number(r.qty || 0) * Number(r.price || 0);
+            map.set(name, cur);
         }
         return Array.from(map.entries())
             .map(([name, v]) => ({ name, qty: v.qty, total: v.total }))
@@ -133,31 +130,6 @@ export default function ReportScreen() {
     }, [returns]);
 
     const money = (n: number) => `${(n || 0).toLocaleString()} so‘m`;
-
-    // ---- Summary fetcher (serverdan)
-    const fetchSummary = async () => {
-        if (!selectedStoreId) return;
-        setMsLoading(true);
-        try {
-            const { data, error } = await supabase
-                .from("monthly_store_summary")
-                .select("store_id, ym, total_sales, total_returns, total_cash, delta, debt_raw, debt")
-                .eq("ym", month)
-                .eq("store_id", selectedStoreId)
-                .maybeSingle();
-
-            if (error) setMsRow(null);
-            else setMsRow((data as any) ?? null);
-        } finally {
-            setMsLoading(false);
-        }
-    };
-
-    // Month yoki store o‘zgarsa summary-ni yangilaymiz
-    useEffect(() => {
-        fetchSummary();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [selectedStoreId, month]);
 
     // ---- Early return
     if (!selectedStoreId) {
@@ -172,11 +144,12 @@ export default function ReportScreen() {
         toast.showLoading("Hisobot tayyorlanmoqda…", 0);
         try {
             const totals = {
-                totalSales: msRow?.total_sales ?? localTotalSales,
-                totalCash: msRow?.total_cash ?? localTotalCash,
-                debt: (msRow?.debt_raw ?? msRow?.debt) ?? localDebtCarry,
+                totalSales: localTotalSales,
+                totalCash: localTotalCash,
+                debt: localDebtCarry,
                 returnCount: returnsQty,
             };
+
             const result = await exportDashboardPdf({
                 storeName,
                 periodLabel: month,
@@ -190,7 +163,9 @@ export default function ReportScreen() {
             toast.hide();
             setPdfModalOpen(true);
         } catch {
-            toast.hide();
+            try {
+                toast.hide();
+            } catch { }
         }
     };
 
@@ -200,11 +175,6 @@ export default function ReportScreen() {
         setMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
     };
 
-    const viewTotalSales = msRow?.total_sales ?? localTotalSales;
-    const viewTotalReturns = msRow?.total_returns ?? localTotalReturns;
-    const viewTotalCash = msRow?.total_cash ?? localTotalCash;
-    const viewDebt = (msRow?.debt_raw ?? msRow?.debt) ?? localDebtCarry;
-
     return (
         <>
             <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16 }}>
@@ -212,10 +182,7 @@ export default function ReportScreen() {
                     <TouchableOpacity onPress={() => shiftMonth(-1)} style={{ padding: 6 }}>
                         <Text style={{ fontWeight: "800" }}>‹</Text>
                     </TouchableOpacity>
-                    <Text style={{ fontWeight: "800", fontSize: 16, marginHorizontal: 8 }}>
-                        {month}
-                        {msLoading ? " …" : ""}
-                    </Text>
+                    <Text style={{ fontWeight: "800", fontSize: 16, marginHorizontal: 8 }}>{month}</Text>
                     <TouchableOpacity onPress={() => shiftMonth(1)} style={{ padding: 6 }}>
                         <Text style={{ fontWeight: "800" }}>›</Text>
                     </TouchableOpacity>
@@ -231,11 +198,11 @@ export default function ReportScreen() {
 
                 <View style={{ flexDirection: "row", gap: 12 }}>
                     <View style={{ flex: 1, gap: 12 }}>
-                        <StatCard title="Umumiy summa" value={money(viewTotalSales)} />
-                        <StatCard title="Qarz" value={money(viewDebt)} />
+                        <StatCard title="Umumiy summa" value={money(localTotalSales)} />
+                        <StatCard title="Qarz" value={money(localDebtCarry)} />
                     </View>
                     <View style={{ flex: 1, gap: 12 }}>
-                        <StatCard title="Olingan summa" value={money(viewTotalCash)} />
+                        <StatCard title="Olingan summa" value={money(localTotalCash)} />
                         <StatCard title="Vazvrat (miqdor)" value={String(returnsQty)} />
                     </View>
                 </View>

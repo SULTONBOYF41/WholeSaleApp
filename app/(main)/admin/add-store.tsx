@@ -1,7 +1,6 @@
 // app/(main)/admin/add-store.tsx
 import Toast from "@/components/Toast";
 import { Button, C, Card, Chip, H1, H2, Input } from "@/components/UI";
-import { supabase } from "@/lib/supabase";
 import { useAppStore } from "@/store/appStore";
 import { useSyncStore } from "@/store/syncStore";
 import { useToastStore } from "@/store/toastStore";
@@ -29,6 +28,9 @@ export default function AddStore() {
     const upsertStoreLocal = useAppStore((s) => s.upsertStore);
     const removeStoreLocal = useAppStore((s) => s.removeStore);
 
+    const pullNow = useAppStore((s) => s.pullNow);
+    const pushNow = useAppStore((s) => s.pushNow);
+
     const online = useSyncStore((s) => s.online);
     const toast = useToastStore();
 
@@ -46,6 +48,7 @@ export default function AddStore() {
 
     const branches = stores.filter((s) => s.type === "branch");
     const markets = stores.filter((s) => s.type === "market");
+
     const sections = useMemo(
         () => [
             { title: "Филиаллар", data: branches },
@@ -72,12 +75,28 @@ export default function AddStore() {
         return out;
     };
 
+    const syncNow = async () => {
+        // Sizda pushAndPullNow bor deb turibmiz, bo‘lmasa fallback:
+        const maybe = (useSyncStore.getState() as any).pushAndPullNow;
+        if (typeof maybe === "function") return maybe();
+
+        // fallback:
+        try {
+            await pushNow();
+        } catch { }
+        try {
+            await pullNow();
+        } catch { }
+    };
+
     const submit = async () => {
         if (submittingRef.current) return;
+
         if (!name.trim()) {
             toast.show("Nomi bo‘sh bo‘lmasin");
             return;
         }
+
         submittingRef.current = true;
 
         const payload = {
@@ -86,55 +105,36 @@ export default function AddStore() {
             prices: normalizePrices(),
         };
 
-        if (online) {
+        try {
             toast.showLoading(editing ? "Yangilanmoqda…" : "Saqlanmoqda…");
-            try {
-                if (editing?.id) {
-                    // UPDATE: upsert bilan
-                    const { error } = await supabase
-                        .from("stores")
-                        .upsert({ id: editing.id, ...payload }, { onConflict: "id" });
-                    if (error) throw error;
-                } else {
-                    // INSERT: barqarorlik uchun id berib yuboramiz (ixtiyoriy)
-                    const newId = uuidv4();
-                    const { error } = await supabase.from("stores").insert({ id: newId, ...payload });
-                    if (error) throw error;
-                }
 
-                // PUSH bo'ldi -> PULL
-                await useAppStore.getState().pullNow();
-                resetForm();
-                toast.hide();
-                toast.show(editing ? "Tahrir saqlandi" : "Do‘kon qo‘shildi");
-            } catch (e: any) {
-                toast.hide();
-                const msg = e?.message?.includes("Network request failed")
-                    ? "Tarmoq yo‘q. Offline sinab ko‘ring."
-                    : e?.message ?? "Saqlashda xato";
-                toast.show(msg);
-            } finally {
-                submittingRef.current = false;
+            const isEditing = Boolean(editing?.id);
+            const id = editing?.id ?? uuidv4();
+
+            // ✅ har doim LOCAL ga yozamiz (offline/online farqi yo‘q)
+            await upsertStoreLocal({
+                id,
+                name: payload.name,
+                type: payload.type,
+                prices: payload.prices,
+            });
+
+            // ✅ online bo‘lsa serverga yuboramiz
+            if (online) {
+                await syncNow();
             }
-        } else {
-            // OFFLINE → lokal queue (sizdagi local handler nomi bilan)
-            toast.showLoading("Offline: navbatga yozildi");
-            try {
-                const isEditing = Boolean(editing?.id);
-                const localId = editing?.id ?? uuidv4();
-                await upsertStoreLocal({
-                    id: localId,
-                    name: payload.name,
-                    type: payload.type,
-                    prices: payload.prices,
-                    // updated_at NI YUBORMAYMIZ (TS xatosi bo'lsa ham, DBda default/trigger bor)
-                });
-                resetForm();
-                toast.hide();
-                toast.show(isEditing ? "Tahrir navbatga yozildi (offline)" : "Qo‘shish navbatga yozildi (offline)");
-            } finally {
-                submittingRef.current = false;
-            }
+
+            resetForm();
+            toast.hide();
+            toast.show(isEditing ? "Tahrir saqlandi" : "Do‘kon qo‘shildi");
+        } catch (e: any) {
+            toast.hide();
+            const msg = e?.message?.includes("Network request failed")
+                ? "Tarmoq yo‘q. Offline rejimda saqlanadi."
+                : e?.message ?? "Saqlashda xato";
+            toast.show(msg);
+        } finally {
+            submittingRef.current = false;
         }
     };
 
@@ -156,92 +156,62 @@ export default function AddStore() {
 
     const doRemoveNow = async () => {
         if (!pinStoreId) return;
+
         if (pinText !== DELETE_PIN) {
             setPinError("PIN noto‘g‘ri kiritildi");
             return;
         }
         setPinError(null);
 
-        if (online) {
-            toast.show("O‘chirilmoqda…");
-            try {
-                const { data: rpcOk, error: rpcErr } = await supabase.rpc("delete_store_cascade", { _id: pinStoreId });
-                if (rpcErr && !rpcErr.message?.toLowerCase?.().includes("function")) throw rpcErr;
-                if ((rpcErr && rpcErr.message?.toLowerCase?.().includes("function")) || rpcOk === false) {
-                    const { error } = await supabase.from("stores").delete().eq("id", pinStoreId);
-                    if (error) throw error;
-                }
+        try {
+            toast.showLoading("O‘chirilmoqda…");
 
-                await useAppStore.getState().pullNow();
-                toast.show("O‘chirildi");
-            } catch (e: any) {
-                const msg =
-                    e?.message?.includes("foreign key") || e?.code === "23503"
-                        ? "O‘chirish mumkin emas: bog‘liq ma’lumotlar bor."
-                        : e?.message?.includes("Network request failed")
-                            ? "Tarmoq yo‘q. Offline o‘chirishga yozildi."
-                            : e?.message || "O‘chirishda xato";
-                toast.show(msg);
-            } finally {
-                setPinVisible(false);
-                setPinStoreId(null);
-                setPinText("");
-            }
-        } else {
-            toast.show("Offline: navbatga yozildi");
+            // ✅ har doim LOCAL dan o‘chir (queue ham shu yerda)
             await removeStoreLocal(pinStoreId);
+
+            // ✅ online bo‘lsa serverga push qilib snapshotni yangilaymiz
+            if (online) {
+                await syncNow();
+            }
+
+            toast.hide();
+            toast.show("O‘chirildi");
+        } catch (e: any) {
+            toast.hide();
+            toast.show(e?.message || "O‘chirishda xato");
+        } finally {
             setPinVisible(false);
             setPinStoreId(null);
             setPinText("");
         }
     };
 
-    // --- Realtime + PUSH→PULL orkestratsiya (faqat online)
+    // --- Online bo‘lsa polling: stores/products/cat narxlari yangilanishi uchun
     const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-    const chRefStores = useRef<ReturnType<typeof supabase.channel> | null>(null);
-    const chRefProducts = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
     useEffect(() => {
-        const pushAndPullNow = useSyncStore.getState().pushAndPullNow; // << YANGI nom
-
         if (online) {
-            // Avval lokal navbatni PUSH, keyin PULL
-            pushAndPullNow().catch(() => { });
-
-            // Realtime kanallar
-            if (chRefStores.current) { try { supabase.removeChannel(chRefStores.current as any); } catch { } chRefStores.current = null; }
-            if (chRefProducts.current) { try { supabase.removeChannel(chRefProducts.current as any); } catch { } chRefProducts.current = null; }
-
-            chRefStores.current = supabase
-                .channel("rt-stores")
-                .on("postgres_changes", { event: "*", schema: "public", table: "stores" }, () =>
-                    useAppStore.getState().pullNow().catch(() => { })
-                )
-                .subscribe();
-
-            chRefProducts.current = supabase
-                .channel("rt-products-for-add-store")
-                .on("postgres_changes", { event: "*", schema: "public", table: "products" }, () =>
-                    useAppStore.getState().pullNow().catch(() => { })
-                )
-                .subscribe();
-
+            // kirishda 1 marta sync
+            syncNow().catch(() => { });
             if (!pollRef.current) {
                 pollRef.current = setInterval(() => {
                     useAppStore.getState().pullNow().catch(() => { });
                 }, 15000);
             }
         } else {
-            if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
-            if (chRefStores.current) { try { supabase.removeChannel(chRefStores.current as any); } catch { } chRefStores.current = null; }
-            if (chRefProducts.current) { try { supabase.removeChannel(chRefProducts.current as any); } catch { } chRefProducts.current = null; }
+            if (pollRef.current) {
+                clearInterval(pollRef.current);
+                pollRef.current = null;
+            }
         }
 
         return () => {
-            if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
-            if (chRefStores.current) { try { supabase.removeChannel(chRefStores.current as any); } catch { } chRefStores.current = null; }
-            if (chRefProducts.current) { try { supabase.removeChannel(chRefProducts.current as any); } catch { } chRefProducts.current = null; }
+            if (pollRef.current) {
+                clearInterval(pollRef.current);
+                pollRef.current = null;
+            }
         };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [online]);
 
     const ListHeader = useMemo(
@@ -263,10 +233,9 @@ export default function AddStore() {
 
                 <H2>Категориялар ва нарх (сўм)</H2>
                 {categories.length === 0 && (
-                    <Text style={{ color: C.muted }}>
-                        Категориялар ҳали йўқ — аввало “Каталог”дан қўшинг.
-                    </Text>
+                    <Text style={{ color: C.muted }}>Категориялар ҳали йўқ — аввало “Каталог”дан қўшинг.</Text>
                 )}
+
                 {categories.map((c) => (
                     <View key={c.id} style={{ flexDirection: "row", alignItems: "center", gap: 10, marginTop: 8 }}>
                         <Text style={{ width: 140 }}>{c.name}</Text>
@@ -312,8 +281,14 @@ export default function AddStore() {
                                 <TouchableOpacity
                                     onPress={() => startEdit(item)}
                                     style={{
-                                        width: 40, height: 40, borderRadius: 20, backgroundColor: "#fff",
-                                        borderWidth: 1, borderColor: "#E9ECF1", alignItems: "center", justifyContent: "center",
+                                        width: 40,
+                                        height: 40,
+                                        borderRadius: 20,
+                                        backgroundColor: "#fff",
+                                        borderWidth: 1,
+                                        borderColor: "#E9ECF1",
+                                        alignItems: "center",
+                                        justifyContent: "center",
                                     }}
                                     accessibilityLabel="Таҳрирлаш"
                                 >
@@ -323,8 +298,14 @@ export default function AddStore() {
                                 <TouchableOpacity
                                     onPress={() => confirmRemove(item.id)}
                                     style={{
-                                        width: 40, height: 40, borderRadius: 20, backgroundColor: "#FCE9EA",
-                                        borderWidth: 1, borderColor: "#F4C7CB", alignItems: "center", justifyContent: "center",
+                                        width: 40,
+                                        height: 40,
+                                        borderRadius: 20,
+                                        backgroundColor: "#FCE9EA",
+                                        borderWidth: 1,
+                                        borderColor: "#F4C7CB",
+                                        alignItems: "center",
+                                        justifyContent: "center",
                                     }}
                                     accessibilityLabel="Ўчириш"
                                 >
@@ -342,27 +323,41 @@ export default function AddStore() {
                     <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 16, borderWidth: 1, borderColor: "#E9ECF1" }}>
                         <Text style={{ fontSize: 18, fontWeight: "900", color: PRIMARY }}>O‘chirishni tasdiqlang</Text>
                         <Text style={{ marginTop: 8, color: "#4B5563" }}>
-                            Diqqat! Ushbu filial/do‘kon o‘chirilsа, unga tegishli barcha ma’lumotlar (sotuvlar,
-                            qaytarishlar, olingan summalar) ham o‘chadi.
+                            Diqqat! Ushbu filial/do‘kon o‘chirilsа, unga tegishli barcha ma’lumotlar (sotuvlar, qaytarishlar,
+                            olingan summalar) ham o‘chadi.
                         </Text>
 
                         <Text style={{ marginTop: 12, fontWeight: "800" }}>4 xonali PIN kiriting</Text>
                         <TextInput
                             value={pinText}
-                            onChangeText={(t) => { setPinText(t.replace(/\D/g, "").slice(0, 4)); setPinError(null); }}
+                            onChangeText={(t) => {
+                                setPinText(t.replace(/\D/g, "").slice(0, 4));
+                                setPinError(null);
+                            }}
                             keyboardType="number-pad"
                             maxLength={4}
                             placeholder="••••"
                             style={{
-                                marginTop: 6, borderWidth: 1, borderColor: pinError ? "#ef4444" : "#E9ECF1",
-                                borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, fontSize: 18, letterSpacing: 4,
+                                marginTop: 6,
+                                borderWidth: 1,
+                                borderColor: pinError ? "#ef4444" : "#E9ECF1",
+                                borderRadius: 10,
+                                paddingHorizontal: 12,
+                                paddingVertical: 10,
+                                fontSize: 18,
+                                letterSpacing: 4,
                             }}
                         />
                         {pinError ? <Text style={{ color: "#ef4444", marginTop: 6 }}>{pinError}</Text> : null}
 
                         <View style={{ flexDirection: "row", gap: 10, marginTop: 14, justifyContent: "flex-end" }}>
                             <TouchableOpacity
-                                onPress={() => { setPinVisible(false); setPinText(""); setPinStoreId(null); setPinError(null); }}
+                                onPress={() => {
+                                    setPinVisible(false);
+                                    setPinText("");
+                                    setPinStoreId(null);
+                                    setPinError(null);
+                                }}
                                 style={{ paddingVertical: 12, paddingHorizontal: 16, borderRadius: 12, backgroundColor: "#F3F4F6" }}
                             >
                                 <Text style={{ fontWeight: "800" }}>Bekor</Text>

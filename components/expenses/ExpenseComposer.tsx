@@ -22,20 +22,24 @@ export default function ExpenseComposer({ kind }: { kind: ExpenseKind }) {
             .map((r) => ({ title: r.title.trim(), qty: Number(r.qty || 0), price: Number(r.price || 0) }))
             .filter((r) => r.title && r.qty > 0 && r.price > 0);
 
-    const total = normalize().reduce((s, r) => s + r.qty * r.price, 0);
+    const normalized = useMemo(() => normalize(), [rows]);
+    const total = useMemo(() => normalized.reduce((s, r) => s + r.qty * r.price, 0), [normalized]);
+    const canSave = normalized.length > 0 && !saving;
 
-    // 1) onSave boshiga double-submit guard
+    const resetForm = () => {
+        setRows([{ title: "", qty: "", price: "" }]);
+        setEditingBatch(null);
+    };
+
     const onSave = async () => {
-        if (saving) return;             // <— qo'shildi
-        const n = normalize();
-        if (!n.length) return;
+        if (!canSave) return;
         setSaving(true);
         try {
             if (editingBatch) {
-                await editBatch(editingBatch.id, kind, n);   // <— faqat editBatch
+                await editBatch(editingBatch.id, kind, normalized);
                 setEditingBatch(null);
             } else {
-                await addBatch(kind, n);
+                await addBatch(kind, normalized);
             }
             setRows([{ title: "", qty: "", price: "" }]);
             setSavedBanner(true);
@@ -45,10 +49,8 @@ export default function ExpenseComposer({ kind }: { kind: ExpenseKind }) {
         }
     };
 
-
-    // 3) onEdit ichida — faqat batch.id saqlanib, formaga aynan shu batch qatorlari yuklanadi
     const onEdit = (b: ExpenseBatch) => {
-        setEditingBatch(b);  // <— MUHIM: keyin saqlaganda aynan shu id bilan editBatch ketadi
+        setEditingBatch(b);
         setRows(
             b.items.map((i) => {
                 const qty = Number(i.qty ?? 0) || 0;
@@ -59,16 +61,12 @@ export default function ExpenseComposer({ kind }: { kind: ExpenseKind }) {
         if (!showHistory) setShowHistory(true);
     };
 
-    // 2) onDelete boshiga ham guard
     const onDelete = async (b: ExpenseBatch) => {
-        if (saving) return;             // <— qo'shildi
+        if (saving) return;
         setSaving(true);
         try {
-            await deleteBatch(b.id);    // <— faqat batch.id yuboramiz
-            if (editingBatch?.id === b.id) {
-                setEditingBatch(null);
-                setRows([{ title: "", qty: "", price: "" }]);
-            }
+            await deleteBatch(b.id);
+            if (editingBatch?.id === b.id) resetForm();
         } finally {
             setSaving(false);
         }
@@ -109,10 +107,18 @@ export default function ExpenseComposer({ kind }: { kind: ExpenseKind }) {
                 {editingBatch && (
                     <View style={styles.editingTag}>
                         <Text style={{ color: "#770E13", fontWeight: "800" }}>Tahrirlash rejimi</Text>
+
+                        <TouchableOpacity onPress={resetForm} style={styles.cancelEditBtn} activeOpacity={0.8}>
+                            <Text style={{ color: "#770E13", fontWeight: "800" }}>Bekor qilish</Text>
+                        </TouchableOpacity>
                     </View>
                 )}
 
-                <TouchableOpacity onPress={onSave} style={styles.saveBtn}>
+                <TouchableOpacity
+                    onPress={onSave}
+                    style={[styles.saveBtn, !canSave && { opacity: 0.5 }]}
+                    disabled={!canSave}
+                >
                     <Text style={styles.saveBtnText}>{editingBatch ? "O‘zgartirishni saqlash" : "Saqlash"}</Text>
                 </TouchableOpacity>
 
@@ -158,6 +164,7 @@ const styles = StyleSheet.create({
     modalWrap: { flex: 1, backgroundColor: "rgba(0,0,0,0.25)", alignItems: "center", justifyContent: "center" },
     modalCard: { backgroundColor: "#fff", padding: 20, borderRadius: 14, minWidth: 180, alignItems: "center" },
     editingTag: { marginHorizontal: 12, padding: 10, borderRadius: 10, backgroundColor: "#FCE9EA", borderWidth: 1, borderColor: "#F4C7CB", alignItems: "center" },
+    cancelEditBtn: { marginTop: 8, paddingVertical: 10, paddingHorizontal: 14, borderRadius: 10, borderWidth: 1, borderColor: "#F4C7CB", backgroundColor: "#fff" },
     banner: { position: "absolute", top: 8, left: 12, right: 12, zIndex: 20, backgroundColor: "#E7F8ED", borderColor: "#B6E2C1", borderWidth: 1, padding: 10, borderRadius: 10, alignItems: "center" },
     bannerText: { color: "#116B2A", fontWeight: "800" },
 });

@@ -4,13 +4,13 @@ import { useSyncStore } from "@/store/syncStore";
 import { Ionicons } from "@expo/vector-icons";
 import type { Href } from "expo-router";
 import { router, Stack, usePathname } from "expo-router";
-import React, { useEffect } from "react";
+import React, { useEffect, useRef } from "react";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 const PRIMARY = "#770E13";
 
-type TabItem = { name: string; icon: keyof typeof Ionicons.glyphMap; href: Href; };
+type TabItem = { name: string; icon: keyof typeof Ionicons.glyphMap; href: Href };
 
 const TABS: TabItem[] = [
     { name: "Hisobot", icon: "stats-chart-outline", href: "/(main)/expenses/report" as Href },
@@ -37,12 +37,54 @@ const isActive = (path: string | null | undefined, href: string) => {
 
 export default function ExpensesLayout() {
     const pathname = usePathname();
-    const { fetchAll } = useExpensesStore();
+
+    const fetchAll = useExpensesStore((s) => s.fetchAll);
     const online = useSyncStore((s) => s.online);
 
-    // 👉 faqat online bo'lsa fetchAll
+    const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+    // ✅ Har doim local’dan yuklab ko‘rsatamiz.
+    // ✅ Online bo‘lsa: push→pull (yoki pull) + polling
     useEffect(() => {
-        if (online) fetchAll().catch(() => { });
+        // doim local snapshot
+        fetchAll().catch(() => { });
+
+        const syncNow = async () => {
+            // agar sizda pushAndPullNow bo‘lsa shu ishlaydi
+            const maybe = (useSyncStore.getState() as any).pushAndPullNow;
+            if (typeof maybe === "function") {
+                await maybe();
+                return;
+            }
+            // fallback: faqat expenses fetchAll (local) + (agar store pullNow bo'lsa) pull
+            const pullNow = (useExpensesStore.getState() as any).pullNow;
+            if (typeof pullNow === "function") {
+                await pullNow();
+            } else {
+                await fetchAll();
+            }
+        };
+
+        if (online) {
+            syncNow().catch(() => { });
+            if (!pollRef.current) {
+                pollRef.current = setInterval(() => {
+                    syncNow().catch(() => { });
+                }, 15000);
+            }
+        } else {
+            if (pollRef.current) {
+                clearInterval(pollRef.current);
+                pollRef.current = null;
+            }
+        }
+
+        return () => {
+            if (pollRef.current) {
+                clearInterval(pollRef.current);
+                pollRef.current = null;
+            }
+        };
     }, [online, fetchAll]);
 
     return (
@@ -54,7 +96,9 @@ export default function ExpensesLayout() {
                         const href = t.href as string;
                         const active = isActive(pathname, href);
                         const color = active ? PRIMARY : "#555";
-                        const go = () => { if (!active) router.replace(t.href); };
+                        const go = () => {
+                            if (!active) router.replace(t.href);
+                        };
                         return (
                             <TouchableOpacity
                                 key={href}

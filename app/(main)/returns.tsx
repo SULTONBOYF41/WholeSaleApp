@@ -1,7 +1,6 @@
 // app/(main)/returns.tsx
 import Toast from "@/components/Toast";
 import { getStorePrice } from "@/lib/pricing";
-import { supabase } from "@/lib/supabase";
 import { useAppStore } from "@/store/appStore";
 import { useSyncStore } from "@/store/syncStore";
 import { useToastStore } from "@/store/toastStore";
@@ -26,13 +25,14 @@ type Row = { key: string; product?: Product; qty: string; price: string; unit: U
 export default function Returns() {
     // === Global ===
     const currentStoreId = useAppStore((s) => s.currentStoreId);
-    const setCurrentStore = useAppStore((s) => s.setCurrentStore);
     const stores = useAppStore((s) => s.stores);
     const products = useAppStore((s) => s.products);
 
     const addReturn = useAppStore((s) => s.addReturn);
 
     const online = useSyncStore((s) => s.online);
+    const pushNow = useAppStore((s) => s.pushNow);
+    const pullNow = useAppStore((s) => s.pullNow);
     const toast = useToastStore();
 
     // === Local UI ===
@@ -41,13 +41,9 @@ export default function Returns() {
     const [search, setSearch] = useState("");
 
     const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-    const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
     const effectiveStoreId = String(currentStoreId || "");
-    const store = useMemo(
-        () => stores.find((s) => String(s.id) === String(currentStoreId)),
-        [stores, currentStoreId]
-    );
+    const store = useMemo(() => stores.find((s) => String(s.id) === String(currentStoreId)), [stores, currentStoreId]);
     const NeedStore = !effectiveStoreId;
 
     const money = (n: number) => (n || 0).toLocaleString() + " so‘m";
@@ -59,27 +55,20 @@ export default function Returns() {
         return products.filter((p) => (p.name || "").toLowerCase().includes(q));
     }, [products, search]);
 
-    const total = useMemo(
-        () => rows.reduce((a, r) => a + parseNum(r.qty) * parseNum(r.price), 0),
-        [rows]
-    );
+    const total = useMemo(() => rows.reduce((a, r) => a + parseNum(r.qty) * parseNum(r.price), 0), [rows]);
 
     const openPicker = (key: string) => setPickOpenFor(key);
 
     const selectProduct = (p: Product) => {
         const defPrice = getStorePrice({ storeId: effectiveStoreId, stores, product: p });
-        setRows((prev) =>
-            prev.map((r) => (r.key === pickOpenFor ? { ...r, product: p, price: String(defPrice ?? "") } : r))
-        );
+        setRows((prev) => prev.map((r) => (r.key === pickOpenFor ? { ...r, product: p, price: String(defPrice ?? "") } : r)));
         setPickOpenFor(null);
         setSearch("");
     };
 
-    const addRow = () =>
-        setRows((r) => [...r, { key: `r${r.length + 1}`, qty: "", price: "", unit: "дона" }]);
+    const addRow = () => setRows((r) => [...r, { key: `r${r.length + 1}`, qty: "", price: "", unit: "дона" }]);
 
-    const removeRow = (key: string) =>
-        setRows((r) => (r.length > 1 ? r.filter((x) => x.key !== key) : r));
+    const removeRow = (key: string) => setRows((r) => (r.length > 1 ? r.filter((x) => x.key !== key) : r));
 
     const saveAll = async () => {
         if (!effectiveStoreId) return;
@@ -97,37 +86,25 @@ export default function Returns() {
                 unit: r.unit,
             });
         }
+
         setRows([{ key: "r1", qty: "", price: "", unit: "дона" }]);
 
-        try {
-            await useAppStore.getState().pushNow();
-        } catch { }
-        try {
-            await useAppStore.getState().pullNow();
-        } catch { }
+        // online bo‘lsa serverga yuborib, keyin qayta tortib olamiz
+        if (online) {
+            try {
+                await pushNow();
+            } catch { }
+            try {
+                await pullNow();
+            } catch { }
+        }
 
         try {
             toast.hide();
         } catch { }
     };
 
-    // returns uchun realtime (faqat umumiy refresh uchun)
-    const subscribeRealtime = useCallback(() => {
-        if (channelRef.current) {
-            try {
-                supabase.removeChannel(channelRef.current);
-            } catch { }
-            channelRef.current = null;
-        }
-        const ch = supabase
-            .channel("returns-live")
-            .on("postgres_changes", { event: "*", schema: "public", table: "returns" }, () => {
-                useAppStore.getState().pullNow().catch(() => { });
-            })
-            .subscribe();
-        channelRef.current = ch;
-    }, []);
-
+    // Online bo‘lsa: periodik pull (monitoring/returns/report yangilanishi uchun)
     const startPolling = useCallback(() => {
         if (pollRef.current) return;
         pollRef.current = setInterval(() => {
@@ -143,21 +120,12 @@ export default function Returns() {
     }, []);
 
     useEffect(() => {
+        // store o‘zgarsa form reset
         setRows([{ key: "r1", qty: "", price: "", unit: "дона" }]);
         setSearch("");
 
-        subscribeRealtime();
         if (online) startPolling();
-
-        return () => {
-            stopPolling();
-            if (channelRef.current) {
-                try {
-                    supabase.removeChannel(channelRef.current);
-                } catch { }
-                channelRef.current = null;
-            }
-        };
+        return () => stopPolling();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [effectiveStoreId]);
 
@@ -167,50 +135,19 @@ export default function Returns() {
     }, [online, startPolling, stopPolling]);
 
     return (
-        <KeyboardAvoidingView
-            style={{ flex: 1 }}
-            behavior={Platform.OS === "ios" ? "padding" : undefined}
-            keyboardVerticalOffset={Platform.OS === "ios" ? 80 : 0}
-        >
-            <ScrollView
-                style={{ flex: 1 }}
-                contentContainerStyle={{ padding: 16, paddingBottom: 140 }}
-                keyboardShouldPersistTaps="handled"
-            >
-
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined} keyboardVerticalOffset={Platform.OS === "ios" ? 80 : 0}>
+            <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16, paddingBottom: 140 }} keyboardShouldPersistTaps="handled">
                 {/* Store info yoki ogohlantirish */}
                 {NeedStore ? (
-                    <View
-                        style={{
-                            marginTop: 8,
-                            padding: 12,
-                            borderRadius: 12,
-                            borderWidth: 1,
-                            borderColor: "#E9ECF1",
-                            backgroundColor: "#FFF7ED",
-                        }}
-                    >
-                        <Text style={{ fontWeight: "800", color: "#7C2D12" }}>
-                            Avval filial yoki do‘konni tanlang.
-                        </Text>
+                    <View style={{ marginTop: 8, padding: 12, borderRadius: 12, borderWidth: 1, borderColor: "#E9ECF1", backgroundColor: "#FFF7ED" }}>
+                        <Text style={{ fontWeight: "800", color: "#7C2D12" }}>Avval filial yoki do‘konni tanlang.</Text>
                     </View>
                 ) : (
-                    <View
-                        style={{
-                            marginBottom: 8,
-                            padding: 10,
-                            borderRadius: 12,
-                            borderWidth: 1,
-                            borderColor: "#E9ECF1",
-                            backgroundColor: "#F9FAFB",
-                        }}
-                    >
+                    <View style={{ marginBottom: 8, padding: 10, borderRadius: 12, borderWidth: 1, borderColor: "#E9ECF1", backgroundColor: "#F9FAFB" }}>
                         <Text style={{ fontWeight: "800" }}>
                             {store ? `${store.name} (${store.type === "branch" ? "Filial" : "Do‘kon"})` : "Store topilmadi"}
                         </Text>
-                        <Text style={{ color: "#6B7280", marginTop: 2, fontSize: 12 }}>
-                            ID: {effectiveStoreId || "—"}
-                        </Text>
+                        <Text style={{ color: "#6B7280", marginTop: 2, fontSize: 12 }}>ID: {effectiveStoreId || "—"}</Text>
                     </View>
                 )}
 
@@ -247,9 +184,7 @@ export default function Returns() {
                             <TextInput
                                 placeholder="Миқдор"
                                 value={r.qty}
-                                onChangeText={(v) =>
-                                    setRows((rs) => rs.map((x) => (x.key === r.key ? { ...x, qty: v } : x)))
-                                }
+                                onChangeText={(v) => setRows((rs) => rs.map((x) => (x.key === r.key ? { ...x, qty: v } : x)))}
                                 keyboardType="numeric"
                                 style={{ flex: 1, borderWidth: 1, borderRadius: 10, padding: 12 }}
                                 editable={!NeedStore}
@@ -257,9 +192,7 @@ export default function Returns() {
                             <TextInput
                                 placeholder="Нарх"
                                 value={r.price}
-                                onChangeText={(v) =>
-                                    setRows((rs) => rs.map((x) => (x.key === r.key ? { ...x, price: v } : x)))
-                                }
+                                onChangeText={(v) => setRows((rs) => rs.map((x) => (x.key === r.key ? { ...x, price: v } : x)))}
                                 keyboardType="numeric"
                                 style={{ flex: 1, borderWidth: 1, borderRadius: 10, padding: 12 }}
                                 editable={!NeedStore}
@@ -284,9 +217,7 @@ export default function Returns() {
                             </TouchableOpacity>
                         </View>
 
-                        <Text style={{ marginTop: 6, fontWeight: "700" }}>
-                            Summa: {money(parseNum(r.qty) * parseNum(r.price))}
-                        </Text>
+                        <Text style={{ marginTop: 6, fontWeight: "700" }}>Summa: {money(parseNum(r.qty) * parseNum(r.price))}</Text>
                     </View>
                 ))}
 
@@ -311,9 +242,7 @@ export default function Returns() {
                     <Text style={{ fontWeight: "800", color: "#fff" }}>Қатор қўшиш</Text>
                 </TouchableOpacity>
 
-                <Text style={{ fontWeight: "800", marginTop: 12 }}>
-                    Умумий сумма: {money(total)}
-                </Text>
+                <Text style={{ fontWeight: "800", marginTop: 12 }}>Умумий сумма: {money(total)}</Text>
 
                 <TouchableOpacity
                     onPress={saveAll}
@@ -332,18 +261,10 @@ export default function Returns() {
 
             {/* Product picker */}
             <Modal visible={!!pickOpenFor} transparent animationType="fade" onRequestClose={() => setPickOpenFor(null)}>
-                <Pressable
-                    onPress={() => setPickOpenFor(null)}
-                    style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.2)", justifyContent: "center", padding: 24 }}
-                >
+                <Pressable onPress={() => setPickOpenFor(null)} style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.2)", justifyContent: "center", padding: 24 }}>
                     <View style={{ backgroundColor: "#fff", borderRadius: 12, maxHeight: "70%", overflow: "hidden" }}>
                         <View style={{ padding: 12, borderBottomWidth: 1, borderColor: "#eee" }}>
-                            <TextInput
-                                placeholder="Қидирув..."
-                                value={search}
-                                onChangeText={setSearch}
-                                style={{ borderWidth: 1, borderRadius: 10, padding: 10 }}
-                            />
+                            <TextInput placeholder="Қидирув..." value={search} onChangeText={setSearch} style={{ borderWidth: 1, borderRadius: 10, padding: 10 }} />
                         </View>
 
                         <FlatList
