@@ -1,0 +1,108 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum StoreType {
+  branch
+  market
+}
+
+enum Unit {
+  dona // "дона"
+  kg   // "кг"
+}
+
+enum ExpenseKind {
+  family
+  shop
+  bank
+}
+
+model Store {
+  id         String   @id
+  type       StoreType
+  name       String
+  prices     Json     @default("{}")
+  createdAt  DateTime @default(now())
+
+  sales      Sale[]
+  returns    Return[]
+  cash       CashReceipt[]
+}
+
+model Product {
+  id          String   @id
+  name        String
+  categoryId  String?  @map("category_id")
+  priceBranch Decimal? @map("price_branch")
+  priceMarket Decimal? @map("price_market")
+  createdAt   DateTime @default(now())
+}
+
+model Sale {
+  id          String   @id
+  storeId     String   @map("store_id")
+  storeName   String?  @map("store_name")
+  productName String   @map("product_name")
+  qty         Decimal
+  unit        String   // saqlaymiz: "дона" | "кг"
+  price       Decimal
+  batchId     String?  @map("batch_id")
+  createdAt   DateTime @map("created_at")
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Restrict)
+
+  @@index([storeId, createdAt])
+  @@index([createdAt])
+}
+
+model Return {
+  id          String   @id
+  storeId     String   @map("store_id")
+  storeName   String?  @map("store_name")
+  productName String   @map("product_name")
+  qty         Decimal
+  unit        String
+  price       Decimal
+  batchId     String?  @map("batch_id")
+  createdAt   DateTime @map("created_at")
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Restrict)
+
+  @@index([storeId, createdAt])
+  @@index([createdAt])
+}
+
+model CashReceipt {
+  id        String   @id
+  storeId   String   @map("store_id")
+  amount    Decimal
+  note      String?
+  createdAt DateTime @map("created_at")
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Restrict)
+
+  @@index([storeId, createdAt])
+  @@index([createdAt])
+}
+
+model Expense {
+  id        String   @id @default(uuid())
+  clientId  String   @unique @map("client_id")
+  batchId   String   @map("batch_id")
+  kind      ExpenseKind
+  title     String
+  qty       Decimal?
+  price     Decimal?
+  amount    Decimal
+  note      String?
+  createdAt DateTime @map("created_at")
+
+  @@index([batchId])
+  @@index([createdAt])
+}
