@@ -1,12 +1,16 @@
 // components/expenses/ExpenseComposer.tsx
 import { ExpenseBatch, ExpenseKind, RowInput, useExpensesStore } from "@/store/expensesStore";
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import ExpenseRow, { ExpenseRowValue } from "./ExpenseRow";
 import HistoryCard from "./HistoryCard";
 
 export default function ExpenseComposer({ kind }: { kind: ExpenseKind }) {
-    const { addBatch, editBatch, deleteBatch, listBatches } = useExpensesStore();
+    const { addBatch, editBatch, deleteBatch, listBatches, fetchAll } = useExpensesStore();
+
+    useEffect(() => {
+    fetchAll().catch(() => {});
+  }, [fetchAll]);
     const [rows, setRows] = useState<ExpenseRowValue[]>([{ title: "", qty: "", price: "" }]);
     const [showHistory, setShowHistory] = useState(false);
     const [editingBatch, setEditingBatch] = useState<ExpenseBatch | null>(null);

@@ -1,5 +1,6 @@
 // store/syncStore.ts
 import { useAppStore } from "@/store/appStore";
+import { useExpensesStore } from "@/store/expensesStore";
 import NetInfo from "@react-native-community/netinfo";
 import { create } from "zustand";
 
@@ -29,7 +30,7 @@ export const useSyncStore = create<SyncState>()((set, get) => ({
         const prev = get().online;
         set({ online: v, lastChangeAt: Date.now() });
 
-        // Offline -> Online bo‘lsa: push -> pull
+        // Offline -> Online bo‘lsa: queue -> pull
         if (!prev && v) {
             get().pushAndPullNow().catch(() => { });
         }
@@ -51,16 +52,43 @@ export const useSyncStore = create<SyncState>()((set, get) => ({
     },
 
     async pushAndPullNow() {
+        // 1) expenses queue
+        try {
+            await useExpensesStore.getState().processQueue();
+        } catch { }
+
+        // 2) core app queue (sales/returns/etc)
         const { pushNow, pullNow } = useAppStore.getState();
-        try { await pushNow(); } catch { }
-        try { await pullNow(); } catch { }
+        try {
+            await pushNow();
+        } catch { }
+        try {
+            await pullNow();
+        } catch { }
+
+        // 3) expenses pull (hamma telefonda yangilansin)
+        try {
+            await useExpensesStore.getState().fetchAll();
+        } catch { }
     },
 
-    async load() { return; },
-    async pushSale(_payload) { return; },
-    async processQueue() {
-        const { pushNow } = useAppStore.getState();
-        try { await pushNow(); } catch { }
+    async load() {
+        return;
     },
-    async clearAll() { return; },
+    async pushSale(_payload) {
+        return;
+    },
+    async processQueue() {
+        // eski: faqat appStore push
+        try {
+            await useExpensesStore.getState().processQueue();
+        } catch { }
+        const { pushNow } = useAppStore.getState();
+        try {
+            await pushNow();
+        } catch { }
+    },
+    async clearAll() {
+        return;
+    },
 }));
