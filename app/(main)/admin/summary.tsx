@@ -3,6 +3,7 @@ import { Button, C, Card, H1, H2, Select } from "@/components/UI";
 import { exportMonthlySummaryPdf } from "@/lib/pdf";
 import { useAppStore } from "@/store/appStore";
 import { useExpensesStore } from "@/store/expensesStore";
+import { useSyncStore } from "@/store/syncStore";
 import * as FileSystem from "expo-file-system";
 import * as FileSystemLegacy from "expo-file-system/legacy";
 import * as Linking from "expo-linking";
@@ -10,7 +11,6 @@ import { useRouter } from "expo-router";
 import * as Sharing from "expo-sharing";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Platform, ScrollView, Text, TouchableOpacity, View } from "react-native";
-import { useSyncStore } from "@/store/syncStore";
 
 function monthOptions(lastN = 24) {
     const now = new Date();

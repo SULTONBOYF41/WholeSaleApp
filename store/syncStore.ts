@@ -21,6 +21,7 @@ type SyncState = {
 };
 
 let watcherStarted = false;
+let unsubscribe: null | (() => void) = null;
 
 export const useSyncStore = create<SyncState>()((set, get) => ({
     online: true,
@@ -30,7 +31,6 @@ export const useSyncStore = create<SyncState>()((set, get) => ({
         const prev = get().online;
         set({ online: v, lastChangeAt: Date.now() });
 
-        // Offline -> Online bo‘lsa: queue -> pull
         if (!prev && v) {
             get().pushAndPullNow().catch(() => { });
         }
@@ -45,7 +45,7 @@ export const useSyncStore = create<SyncState>()((set, get) => ({
             get().setOnline(on);
         });
 
-        NetInfo.addEventListener((state) => {
+        unsubscribe = NetInfo.addEventListener((state) => {
             const on = !!state.isConnected && (state.isInternetReachable ?? true);
             if (on !== get().online) get().setOnline(on);
         });
@@ -57,38 +57,25 @@ export const useSyncStore = create<SyncState>()((set, get) => ({
             await useExpensesStore.getState().processQueue();
         } catch { }
 
-        // 2) core app queue (sales/returns/etc)
+        // 2) core app queue
         const { pushNow, pullNow } = useAppStore.getState();
-        try {
-            await pushNow();
-        } catch { }
-        try {
-            await pullNow();
-        } catch { }
+        try { await pushNow(); } catch { }
+        try { await pullNow(); } catch { }
 
-        // 3) expenses pull (hamma telefonda yangilansin)
+        // 3) expenses pull
         try {
             await useExpensesStore.getState().fetchAll();
         } catch { }
     },
 
-    async load() {
-        return;
-    },
-    async pushSale(_payload) {
-        return;
-    },
+    async load() { return; },
+    async pushSale(_payload) { return; },
+
     async processQueue() {
-        // eski: faqat appStore push
-        try {
-            await useExpensesStore.getState().processQueue();
-        } catch { }
+        try { await useExpensesStore.getState().processQueue(); } catch { }
         const { pushNow } = useAppStore.getState();
-        try {
-            await pushNow();
-        } catch { }
+        try { await pushNow(); } catch { }
     },
-    async clearAll() {
-        return;
-    },
+
+    async clearAll() { return; },
 }));

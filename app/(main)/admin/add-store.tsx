@@ -1,333 +1,213 @@
 // app/(main)/admin/add-store.tsx
-import Toast from "@/components/Toast";
-import { Button, C, Card, Chip, H1, H2, Input } from "@/components/UI";
+import { Ionicons } from "@expo/vector-icons";
+import React, { useMemo, useState } from "react";
+import { Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+
 import { useAppStore } from "@/store/appStore";
 import { useSyncStore } from "@/store/syncStore";
 import { useToastStore } from "@/store/toastStore";
-import type { Store, StoreType } from "@/types";
-import { Ionicons } from "@expo/vector-icons";
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Modal, SectionList, Text, TextInput, TouchableOpacity, View } from "react-native";
 
+type StoreType = "branch" | "market";
 const PRIMARY = "#770E13";
 const DELETE_PIN = "2112";
 
-// RFC4122 v4 (soddalashtirilgan)
-function uuidv4() {
-    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
-        const r = (Math.random() * 16) | 0;
-        const v = c === "x" ? r : (r & 0x3) | 0x8;
-        return v.toString(16);
-    });
-}
+const genId = () => `${Date.now()}_${Math.random().toString(16).slice(2)}`;
 
 export default function AddStore() {
-    const categories = useAppStore((s) => s.categories);
+    const toast = useToastStore();
+
+    const categories = useAppStore((s: any) => (Array.isArray(s.categories) ? s.categories : []));
     const stores = useAppStore((s) => s.stores);
 
-    const upsertStoreLocal = useAppStore((s) => s.upsertStore);
-    const removeStoreLocal = useAppStore((s) => s.removeStore);
-
-    const pullNow = useAppStore((s) => s.pullNow);
-    const pushNow = useAppStore((s) => s.pushNow);
+    const upsertStore = useAppStore((s) => s.upsertStore);
+    const removeStore = useAppStore((s) => s.removeStore);
 
     const online = useSyncStore((s) => s.online);
-    const toast = useToastStore();
+    const pushAndPullNow = useSyncStore((s) => s.pushAndPullNow);
 
     const [name, setName] = useState("");
     const [type, setType] = useState<StoreType>("branch");
     const [prices, setPrices] = useState<Record<string, string>>({});
-    const [editing, setEditing] = useState<Store | null>(null);
-
-    const submittingRef = useRef(false);
+    const [editingId, setEditingId] = useState<string | null>(null);
 
     const [pinVisible, setPinVisible] = useState(false);
     const [pinText, setPinText] = useState("");
-    const [pinStoreId, setPinStoreId] = useState<string | null>(null);
     const [pinError, setPinError] = useState<string | null>(null);
+    const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
 
-    const branches = stores.filter((s) => s.type === "branch");
-    const markets = stores.filter((s) => s.type === "market");
+    const list = useMemo(() => stores ?? [], [stores]);
 
-    const sections = useMemo(
-        () => [
-            { title: "Филиаллар", data: branches },
-            { title: "Дўконлар", data: markets },
-        ],
-        [branches, markets]
-    );
-
-    const changePrice = (catId: string, v: string) => setPrices((p) => ({ ...p, [catId]: v }));
-
-    const resetForm = () => {
+    const reset = () => {
         setName("");
         setType("branch");
         setPrices({});
-        setEditing(null);
+        setEditingId(null);
     };
 
-    const normalizePrices = (): Record<string, number> => {
+    const normalizePrices = () => {
         const out: Record<string, number> = {};
-        for (const [k, v] of Object.entries(prices)) {
-            const n = Number(v);
-            if (Number.isFinite(n) && v !== "") out[k] = n;
-        }
+        Object.entries(prices || {}).forEach(([k, v]) => {
+            const t = String(v ?? "").trim();
+            if (!t) return;
+            const n = Number(t);
+            if (Number.isFinite(n)) out[String(k)] = n;
+        });
         return out;
     };
 
-    const syncNow = async () => {
-        // Sizda pushAndPullNow bor deb turibmiz, bo‘lmasa fallback:
-        const maybe = (useSyncStore.getState() as any).pushAndPullNow;
-        if (typeof maybe === "function") return maybe();
-
-        // fallback:
-        try {
-            await pushNow();
-        } catch { }
-        try {
-            await pullNow();
-        } catch { }
-    };
-
-    const submit = async () => {
-        if (submittingRef.current) return;
-
-        if (!name.trim()) {
+    const onSave = async () => {
+        const nm = name.trim();
+        if (!nm) {
             toast.show("Nomi bo‘sh bo‘lmasin");
             return;
         }
 
-        submittingRef.current = true;
-
-        const payload = {
-            name: name.trim(),
-            type,
-            prices: normalizePrices(),
-        };
+        const id = editingId ?? genId();
 
         try {
-            toast.showLoading(editing ? "Yangilanmoqda…" : "Saqlanmoqda…");
+            toast.showLoading("Saqlanmoqda…", 0);
+            await upsertStore({ id, name: nm, type, prices: normalizePrices() });
 
-            const isEditing = Boolean(editing?.id);
-            const id = editing?.id ?? uuidv4();
-
-            // ✅ har doim LOCAL ga yozamiz (offline/online farqi yo‘q)
-            await upsertStoreLocal({
-                id,
-                name: payload.name,
-                type: payload.type,
-                prices: payload.prices,
-            });
-
-            // ✅ online bo‘lsa serverga yuboramiz
+            // ✅ Online bo‘lsa sync (expenses ham ketadi)
             if (online) {
-                await syncNow();
+                await pushAndPullNow();
             }
 
-            resetForm();
             toast.hide();
-            toast.show(isEditing ? "Tahrir saqlandi" : "Do‘kon qo‘shildi");
+            toast.show(editingId ? "Tahrir saqlandi" : "Qo‘shildi");
+            reset();
         } catch (e: any) {
             toast.hide();
-            const msg = e?.message?.includes("Network request failed")
-                ? "Tarmoq yo‘q. Offline rejimda saqlanadi."
-                : e?.message ?? "Saqlashda xato";
-            toast.show(msg);
-        } finally {
-            submittingRef.current = false;
+            toast.show(e?.message ?? "Xatolik");
         }
     };
 
-    const startEdit = (s: Store) => {
-        setEditing(s);
-        setName(s.name);
-        setType(s.type);
+    const onEdit = (st: any) => {
+        setEditingId(String(st.id));
+        setName(String(st.name ?? ""));
+        setType((st.type ?? "branch") as StoreType);
+
         const p: Record<string, string> = {};
-        Object.entries(s.prices || {}).forEach(([k, v]) => (p[k] = String(v as number)));
+        Object.entries(st.prices ?? {}).forEach(([k, v]) => (p[String(k)] = String(v ?? "")));
         setPrices(p);
     };
 
-    const confirmRemove = (id: string) => {
-        setPinStoreId(id);
+    const askDelete = (id: string) => {
+        setPendingDeleteId(String(id));
         setPinText("");
         setPinError(null);
         setPinVisible(true);
     };
 
-    const doRemoveNow = async () => {
-        if (!pinStoreId) return;
+    const doDelete = async () => {
+        if (!pendingDeleteId) return;
 
         if (pinText !== DELETE_PIN) {
-            setPinError("PIN noto‘g‘ri kiritildi");
+            setPinError("PIN noto‘g‘ri");
             return;
         }
-        setPinError(null);
 
         try {
-            toast.showLoading("O‘chirilmoqda…");
+            toast.showLoading("O‘chirilmoqda…", 0);
+            await removeStore(pendingDeleteId);
 
-            // ✅ har doim LOCAL dan o‘chir (queue ham shu yerda)
-            await removeStoreLocal(pinStoreId);
-
-            // ✅ online bo‘lsa serverga push qilib snapshotni yangilaymiz
             if (online) {
-                await syncNow();
+                await pushAndPullNow();
             }
 
             toast.hide();
             toast.show("O‘chirildi");
         } catch (e: any) {
             toast.hide();
-            toast.show(e?.message || "O‘chirishda xato");
+            toast.show(e?.message ?? "Xatolik");
         } finally {
             setPinVisible(false);
-            setPinStoreId(null);
+            setPendingDeleteId(null);
             setPinText("");
+            setPinError(null);
         }
     };
 
-    // --- Online bo‘lsa polling: stores/products/cat narxlari yangilanishi uchun
-    const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    return (
+        <View style={{ flex: 1 }}>
+            <ScrollView contentContainerStyle={{ padding: 14, paddingBottom: 28 }}>
+                <Text style={styles.h1}>Filial / Do‘kon qo‘shish</Text>
 
-    useEffect(() => {
-        if (online) {
-            // kirishda 1 marta sync
-            syncNow().catch(() => { });
-            if (!pollRef.current) {
-                pollRef.current = setInterval(() => {
-                    useAppStore.getState().pullNow().catch(() => { });
-                }, 15000);
-            }
-        } else {
-            if (pollRef.current) {
-                clearInterval(pollRef.current);
-                pollRef.current = null;
-            }
-        }
+                <Text style={styles.label}>Nomi</Text>
+                <TextInput value={name} onChangeText={setName} placeholder="Masalan: Urganch filial" style={styles.input} />
 
-        return () => {
-            if (pollRef.current) {
-                clearInterval(pollRef.current);
-                pollRef.current = null;
-            }
-        };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [online]);
-
-    const ListHeader = useMemo(
-        () => (
-            <View style={{ padding: 16, paddingBottom: 0, gap: 10 }}>
-                <H1>Филиал/Дўкон қўшиш</H1>
-
-                <H2>Номи</H2>
-                <Input value={name} onChangeText={setName} placeholder="" />
-
-                <View style={{ flexDirection: "row", gap: 8, marginTop: 2 }}>
-                    <TouchableOpacity onPress={() => setType("branch")} style={{ flex: 1 }}>
-                        <Chip active={type === "branch"} label="Филиал" style={{ alignItems: "center" }} />
+                <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
+                    <TouchableOpacity onPress={() => setType("branch")} style={[styles.typeBtn, type === "branch" && styles.typeBtnActive]}>
+                        <Text style={[styles.typeText, type === "branch" && styles.typeTextActive]}>Filial</Text>
                     </TouchableOpacity>
-                    <TouchableOpacity onPress={() => setType("market")} style={{ flex: 1 }}>
-                        <Chip active={type === "market"} label="Дўкон" style={{ alignItems: "center" }} />
+                    <TouchableOpacity onPress={() => setType("market")} style={[styles.typeBtn, type === "market" && styles.typeBtnActive]}>
+                        <Text style={[styles.typeText, type === "market" && styles.typeTextActive]}>Do‘kon</Text>
                     </TouchableOpacity>
                 </View>
 
-                <H2>Категориялар ва нарх (сўм)</H2>
-                {categories.length === 0 && (
-                    <Text style={{ color: C.muted }}>Категориялар ҳали йўқ — аввало “Каталог”дан қўшинг.</Text>
+                <Text style={[styles.label, { marginTop: 14 }]}>Kategoriya narxlari (ixtiyoriy)</Text>
+                {categories.length === 0 ? (
+                    <Text style={{ color: "#6B7280" }}>Kategoriyalar yo‘q. Avval “Catalog”dan qo‘shing.</Text>
+                ) : (
+                    categories.map((c: any) => (
+                        <View key={String(c.id)} style={styles.priceRow}>
+                            <Text style={{ width: 140 }}>{c.name}</Text>
+                            <TextInput
+                                value={prices[String(c.id)] ?? ""}
+                                onChangeText={(v) => setPrices((p) => ({ ...p, [String(c.id)]: v }))}
+                                keyboardType="numeric"
+                                placeholder="0"
+                                style={[styles.input, { flex: 1, marginTop: 0 }]}
+                            />
+                        </View>
+                    ))
                 )}
 
-                {categories.map((c) => (
-                    <View key={c.id} style={{ flexDirection: "row", alignItems: "center", gap: 10, marginTop: 8 }}>
-                        <Text style={{ width: 140 }}>{c.name}</Text>
-                        <Input
-                            value={prices[c.id] ?? ""}
-                            onChangeText={(v: string) => changePrice(c.id, v)}
-                            keyboardType="numeric"
-                            style={{ flex: 1 }}
-                        />
+                {editingId && (
+                    <View style={styles.editTag}>
+                        <Text style={{ color: PRIMARY, fontWeight: "900" }}>Tahrirlash rejimi</Text>
+                        <TouchableOpacity onPress={reset} style={styles.cancelBtn}>
+                            <Text style={{ color: PRIMARY, fontWeight: "900" }}>Bekor qilish</Text>
+                        </TouchableOpacity>
+                    </View>
+                )}
+
+                <TouchableOpacity onPress={onSave} style={styles.saveBtn}>
+                    <Text style={{ color: "#fff", fontWeight: "900", fontSize: 16 }}>
+                        {editingId ? "O‘zgartirishni saqlash" : "Saqlash"}
+                    </Text>
+                </TouchableOpacity>
+
+                <View style={{ height: 18 }} />
+
+                <Text style={styles.h2}>Ro‘yxat</Text>
+                {list.map((st: any) => (
+                    <View key={String(st.id)} style={styles.card}>
+                        <View style={{ flex: 1 }}>
+                            <Text style={{ fontWeight: "900", fontSize: 16 }}>{st.name}</Text>
+                            <Text style={{ color: "#6B7280" }}>{st.type === "branch" ? "Filial" : "Do‘kon"}</Text>
+                        </View>
+
+                        <TouchableOpacity onPress={() => onEdit(st)} style={styles.iconBtn}>
+                            <Ionicons name="create-outline" size={20} color={PRIMARY} />
+                        </TouchableOpacity>
+
+                        <TouchableOpacity onPress={() => askDelete(String(st.id))} style={[styles.iconBtn, { backgroundColor: "#FCE9EA", borderColor: "#F4C7CB" }]}>
+                            <Ionicons name="trash-outline" size={20} color={PRIMARY} />
+                        </TouchableOpacity>
                     </View>
                 ))}
+            </ScrollView>
 
-                <Button onPress={submit} title={editing ? "Сақлаш" : "Қўшиш"} />
-
-                <H2 style={{ marginTop: 8 }}>Жорий рўйхат</H2>
-            </View>
-        ),
-        [name, type, prices, categories.length, editing]
-    );
-
-    return (
-        <>
-            <SectionList
-                sections={sections}
-                keyExtractor={(item) => item.id}
-                stickySectionHeadersEnabled
-                ListHeaderComponent={ListHeader}
-                contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 24 }}
-                renderSectionHeader={({ section }) => (
-                    <View style={{ backgroundColor: C.bg, paddingVertical: 8 }}>
-                        <Text style={{ fontWeight: "800", color: C.text }}>{section.title}</Text>
-                    </View>
-                )}
-                renderItem={({ item }) => (
-                    <Card style={{ marginTop: 8, padding: 12 }}>
-                        <View style={{ flexDirection: "row", alignItems: "center" }}>
-                            <View style={{ flex: 1, paddingRight: 10 }}>
-                                <Text style={{ fontWeight: "800", color: C.text }}>{item.name}</Text>
-                                <Text style={{ color: C.muted }}>{item.type === "branch" ? "Филиал" : "Дўкон"}</Text>
-                            </View>
-
-                            <View style={{ flexDirection: "row", gap: 10 }}>
-                                <TouchableOpacity
-                                    onPress={() => startEdit(item)}
-                                    style={{
-                                        width: 40,
-                                        height: 40,
-                                        borderRadius: 20,
-                                        backgroundColor: "#fff",
-                                        borderWidth: 1,
-                                        borderColor: "#E9ECF1",
-                                        alignItems: "center",
-                                        justifyContent: "center",
-                                    }}
-                                    accessibilityLabel="Таҳрирлаш"
-                                >
-                                    <Ionicons name="create-outline" size={20} color={PRIMARY} />
-                                </TouchableOpacity>
-
-                                <TouchableOpacity
-                                    onPress={() => confirmRemove(item.id)}
-                                    style={{
-                                        width: 40,
-                                        height: 40,
-                                        borderRadius: 20,
-                                        backgroundColor: "#FCE9EA",
-                                        borderWidth: 1,
-                                        borderColor: "#F4C7CB",
-                                        alignItems: "center",
-                                        justifyContent: "center",
-                                    }}
-                                    accessibilityLabel="Ўчириш"
-                                >
-                                    <Ionicons name="close-outline" size={20} color="#E23D3D" />
-                                </TouchableOpacity>
-                            </View>
-                        </View>
-                    </Card>
-                )}
-            />
-
-            {/* DELETE PIN MODAL */}
             <Modal visible={pinVisible} transparent animationType="fade" onRequestClose={() => setPinVisible(false)}>
-                <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.25)", justifyContent: "center", padding: 16 }}>
-                    <View style={{ backgroundColor: "#fff", borderRadius: 16, padding: 16, borderWidth: 1, borderColor: "#E9ECF1" }}>
+                <View style={styles.modalWrap}>
+                    <View style={styles.modalCard}>
                         <Text style={{ fontSize: 18, fontWeight: "900", color: PRIMARY }}>O‘chirishni tasdiqlang</Text>
                         <Text style={{ marginTop: 8, color: "#4B5563" }}>
-                            Diqqat! Ushbu filial/do‘kon o‘chirilsа, unga tegishli barcha ma’lumotlar (sotuvlar, qaytarishlar,
-                            olingan summalar) ham o‘chadi.
+                            Diqqat! Filial/do‘kon o‘chsa, unga tegishli ma’lumotlar ham yo‘qoladi.
                         </Text>
 
-                        <Text style={{ marginTop: 12, fontWeight: "800" }}>4 xonali PIN kiriting</Text>
+                        <Text style={{ marginTop: 12, fontWeight: "900" }}>PIN (4 raqam)</Text>
                         <TextInput
                             value={pinText}
                             onChangeText={(t) => {
@@ -337,44 +217,47 @@ export default function AddStore() {
                             keyboardType="number-pad"
                             maxLength={4}
                             placeholder="••••"
-                            style={{
-                                marginTop: 6,
-                                borderWidth: 1,
-                                borderColor: pinError ? "#ef4444" : "#E9ECF1",
-                                borderRadius: 10,
-                                paddingHorizontal: 12,
-                                paddingVertical: 10,
-                                fontSize: 18,
-                                letterSpacing: 4,
-                            }}
+                            style={[styles.input, { marginTop: 6, letterSpacing: 4, fontSize: 18, borderColor: pinError ? "#ef4444" : "#E5E7EB" }]}
                         />
-                        {pinError ? <Text style={{ color: "#ef4444", marginTop: 6 }}>{pinError}</Text> : null}
+                        {!!pinError && <Text style={{ color: "#ef4444", marginTop: 6 }}>{pinError}</Text>}
 
-                        <View style={{ flexDirection: "row", gap: 10, marginTop: 14, justifyContent: "flex-end" }}>
-                            <TouchableOpacity
-                                onPress={() => {
-                                    setPinVisible(false);
-                                    setPinText("");
-                                    setPinStoreId(null);
-                                    setPinError(null);
-                                }}
-                                style={{ paddingVertical: 12, paddingHorizontal: 16, borderRadius: 12, backgroundColor: "#F3F4F6" }}
-                            >
-                                <Text style={{ fontWeight: "800" }}>Bekor</Text>
+                        <View style={{ flexDirection: "row", gap: 10, justifyContent: "flex-end", marginTop: 14 }}>
+                            <TouchableOpacity onPress={() => setPinVisible(false)} style={[styles.btn, { backgroundColor: "#F3F4F6" }]}>
+                                <Text style={{ fontWeight: "900" }}>Bekor</Text>
                             </TouchableOpacity>
-
-                            <TouchableOpacity
-                                onPress={doRemoveNow}
-                                style={{ paddingVertical: 12, paddingHorizontal: 16, borderRadius: 12, backgroundColor: "#ef4444" }}
-                            >
-                                <Text style={{ fontWeight: "800", color: "#fff" }}>O‘chirish</Text>
+                            <TouchableOpacity onPress={doDelete} style={[styles.btn, { backgroundColor: "#ef4444" }]}>
+                                <Text style={{ fontWeight: "900", color: "#fff" }}>O‘chirish</Text>
                             </TouchableOpacity>
                         </View>
                     </View>
                 </View>
             </Modal>
-
-            <Toast />
-        </>
+        </View>
     );
 }
+
+const styles = StyleSheet.create({
+    h1: { fontSize: 18, fontWeight: "900", marginBottom: 10 },
+    h2: { fontSize: 16, fontWeight: "900", marginBottom: 10 },
+    label: { fontWeight: "800", marginTop: 10, marginBottom: 6 },
+    input: { borderWidth: 1, borderColor: "#E5E7EB", borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, marginTop: 6, backgroundColor: "#fff" },
+
+    typeBtn: { flex: 1, borderWidth: 1, borderColor: "#E5E7EB", borderRadius: 12, paddingVertical: 12, alignItems: "center", backgroundColor: "#fff" },
+    typeBtnActive: { borderColor: PRIMARY, backgroundColor: "#FCE9EA" },
+    typeText: { fontWeight: "900", color: "#111827" },
+    typeTextActive: { color: PRIMARY },
+
+    priceRow: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 10 },
+
+    editTag: { marginTop: 12, padding: 10, borderRadius: 12, backgroundColor: "#FCE9EA", borderWidth: 1, borderColor: "#F4C7CB", alignItems: "center" },
+    cancelBtn: { marginTop: 8, borderWidth: 1, borderColor: "#F4C7CB", backgroundColor: "#fff", paddingVertical: 10, paddingHorizontal: 14, borderRadius: 10 },
+
+    saveBtn: { marginTop: 14, backgroundColor: PRIMARY, borderRadius: 14, alignItems: "center", paddingVertical: 14 },
+
+    card: { flexDirection: "row", alignItems: "center", gap: 10, borderWidth: 1, borderColor: "#eee", borderRadius: 14, padding: 12, marginBottom: 10, backgroundColor: "#fff" },
+    iconBtn: { width: 42, height: 42, borderRadius: 21, borderWidth: 1, borderColor: "#E5E7EB", backgroundColor: "#fff", alignItems: "center", justifyContent: "center" },
+
+    modalWrap: { flex: 1, backgroundColor: "rgba(0,0,0,0.25)", justifyContent: "center", padding: 16 },
+    modalCard: { backgroundColor: "#fff", borderRadius: 16, padding: 16, borderWidth: 1, borderColor: "#E5E7EB" },
+    btn: { paddingVertical: 12, paddingHorizontal: 16, borderRadius: 12 },
+});

@@ -1,4 +1,3 @@
-
 // app/(auth)/login.tsx
 import { Button, C, H1, Input } from "@/components/UI";
 import { api } from "@/lib/api";
@@ -51,8 +50,10 @@ export default function Login() {
     setLoading(true);
     try {
       const res = await api.auth.login(l, password);
+
       if (res?.ok && res?.token) {
-        router.replace("/");
+        // ✅ OLD BUG FIX: router.replace("/") -> index qayta login’ga qaytarib yuborardi
+        router.replace("/(main)/home");
       } else {
         Alert.alert("Xato", "Login yoki parol noto‘g‘ri");
       }
@@ -123,4 +124,3 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
 });
-

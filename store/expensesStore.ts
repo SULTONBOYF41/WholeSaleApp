@@ -382,12 +382,12 @@ export const useExpensesStore = create<State>((set, get) => ({
         let q = await loadQueue();
         if (!q.length) return;
 
-        // ts bo'yicha tartib
         q = [...q].sort((a, b) => a.ts - b.ts);
 
         const remain: QueueItem[] = [];
 
-        for (const it of q) {
+        for (let i = 0; i < q.length; i++) {
+            const it = q[i];
             try {
                 if (it.t === "replace") {
                     await api.expenses.replaceBatch(it.batchId, { kind: it.kind, rows: it.rows });
@@ -395,8 +395,9 @@ export const useExpensesStore = create<State>((set, get) => ({
                     await api.expenses.deleteBatch(it.batchId);
                 }
             } catch {
-                // server yana yiqilsa -> qolganlarini ham qoldiramiz
-                remain.push(it);
+                // birinchi failure bo‘lsa — qolgan hammasini remain qilib qoldiramiz (order saqlanadi)
+                remain.push(it, ...q.slice(i + 1));
+                break;
             }
         }
 

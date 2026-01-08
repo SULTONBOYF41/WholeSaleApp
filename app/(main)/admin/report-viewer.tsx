@@ -127,7 +127,7 @@ export default function ReportViewer() {
                     // Android file:// — ichida ko‘rsatmaymiz, Open orqali tashqarida ochiladi
                     <View style={{ flex: 1, padding: 16, gap: 12 }}>
                         <Text style={{ fontSize: 16 }}>
-                            Bu faylni bu sahifada ko‘rsatib bo‘lmadi. "Open" tugmasi orqali tashqi ilovada oching.
+                            Bu faylni bu sahifada ko‘rsatib bo‘lmadi. {"Open"} tugmasi orqali tashqi ilovada oching.
                         </Text>
                         <TouchableOpacity
                             onPress={openExternally}

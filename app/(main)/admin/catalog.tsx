@@ -21,7 +21,8 @@ function uuidv4() {
 }
 
 export default function Catalog() {
-    const products = useAppStore((s) => s.products);
+    const rawProducts = useAppStore((s: any) => s.products);
+    const products = Array.isArray(rawProducts) ? rawProducts : [];
     const upsertProduct = useAppStore((s) => s.upsertProduct);
     const removeProduct = useAppStore((s) => s.removeProduct);
 

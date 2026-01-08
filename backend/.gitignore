@@ -37,3 +37,17 @@ yarn-error.*
 *.tsbuildinfo
 
 app-example
+
+# env
+backend/.env
+backend/.env.*.bak
+.env
+.env.*
+prisma/dev.db
+
+
+# sqlite local db
+backend/dev.db
+
+# backups
+*.bak.*
